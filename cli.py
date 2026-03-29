@@ -7,9 +7,7 @@ from dotenv import load_dotenv
 
 from agent.application.use_cases import run_fitness_workflow, run_profile_onboarding_workflow
 from agent.models import UserProfile, WorkflowEvent
-from agent.services.profile_service import (
-    load_profile,
-)
+from agent.repositories.profile_repository import load_profile
 
 
 def _format_json(data: Dict[str, Any]) -> str:
@@ -125,28 +123,28 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_default_profile(args: argparse.Namespace) -> UserProfile:
-    # return UserProfile(
-    #     user_id=args.user_id,
-    #     age=args.age,
-    #     weight=args.weight,
-    #     height=args.height,
-    #     gender=args.gender,
-    #     activity_level=args.activity_level,
-    #     fitness_goal=args.fitness_goal,
-    #     workout_frequency=args.workout_frequency,
-    #     workout_duration=args.workout_duration,
-    # )
     return UserProfile(
         user_id=args.user_id,
-        age=23,
-        weight=80,
-        height=160,
-        gender="male",
-        activity_level="light",
-        fitness_goal="cut",
-        workout_frequency=4,
-        workout_duration=60,
+        age=args.age,
+        weight=args.weight,
+        height=args.height,
+        gender=args.gender,
+        activity_level=args.activity_level,
+        fitness_goal=args.fitness_goal,
+        workout_frequency=args.workout_frequency,
+        workout_duration=args.workout_duration,
     )
+    # return UserProfile(
+    #     user_id=args.user_id,
+    #     age=23,
+    #     weight=80,
+    #     height=175,
+    #     gender="male",
+    #     activity_level="light",
+    #     fitness_goal="cut",
+    #     workout_frequency=4,
+    #     workout_duration=60,
+    # )
 
 
 

@@ -4,13 +4,14 @@ from langgraph.graph import END, StateGraph
 
 from ..agents import ProfileCollectionAgent
 from ..models import UserProfile, WorkflowEvent
+from ..repositories.profile_repository import upsert_profile
 from ..services.profile_service import (
     apply_profile_interpretation,
     clear_profile_fields,
+    enrich_profile,
     format_profile_summary,
     get_missing_profile_fields,
     parse_profile_modification_request,
-    update_profile,
 )
 
 
@@ -132,7 +133,7 @@ class ProfileOnboardingGraph:
         )
         self.notify_user(format_profile_summary(state["profile"]))
         answer = await self.prompt_user(
-            "如果这些信息需要修改，请回复“要修改”；如果不用修改，请回复“继续”。"
+            "如果这些信息需要修改，请回复“修改”；如果不用修改，请回复“继续”。"
         )
         normalized = answer.lower()
         if any(token in normalized for token in ["继续", "不用", "不需要", "否", "no", "n"]):
@@ -153,7 +154,7 @@ class ProfileOnboardingGraph:
 
     async def _select_modification_fields(self, state: OnboardingState) -> OnboardingState:
         answer = await self.prompt_user(
-            "你想修改哪些信息？可以直接回复：年龄、体重、身高、性别、活动水平、健身目标、每周训练次数、单次训练时长；多个项目一起说也可以。"
+            "你想修改哪些信息？可以直接回复：年龄、体重、身高、性别、活动水平、健身目标、每周训练次数、单次训练时长。请一次性回复所有需要修改的信息。"
         )
         selected_fields = parse_profile_modification_request(answer)
         self._emit_onboarding_event(
@@ -239,7 +240,8 @@ class ProfileOnboardingGraph:
 
     async def _finalize_profile(self, state: OnboardingState) -> OnboardingState:
         if state["profile_modified"]:
-            state["profile"] = update_profile(state["profile"])
+            state["profile"] = enrich_profile(state["profile"])
+            state["profile"] = upsert_profile(state["profile"])
         if state["missing_fields"]:
             self.notify_user("还有信息未补齐，不过我先保留当前资料。")
         else:

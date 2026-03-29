@@ -22,17 +22,19 @@ from ..prompts import (
     build_workout_plan_user_prompt,
 )
 from ..repositories.food_repository import find_foods_by_text
+from ..repositories.profile_repository import load_profile, upsert_profile
 from ..services.nutrition_service import format_mongo_food_summary, semantic_food_search
-from ..services.profile_service import load_or_create_profile, update_profile
+from ..services.profile_service import enrich_profile
 
 
 async def prepare_profile_artifact(
     user_id: str,
     user_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    profile = UserProfile(**user_profile) if user_profile else load_or_create_profile(user_id)
+    profile = UserProfile(**user_profile) if user_profile else load_profile(user_id)
     profile.user_id = user_id
-    enriched = update_profile(profile)
+    enriched = enrich_profile(profile)
+    enriched = upsert_profile(enriched)
     return {
         "user_profile": enriched.model_dump(),
         "observation": (

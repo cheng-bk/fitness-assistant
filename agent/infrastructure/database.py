@@ -18,7 +18,11 @@ def get_mongo_client() -> MongoClient:
 
     mongo_user = os.getenv("MONGO_USER")
     mongo_password = os.getenv("MONGO_PASSWORD")
-    uri = f"mongodb://{mongo_user}:{mongo_password}@localhost:27019/?authSource=admin"
+    mongo_host = os.getenv("MONGO_HOST", "localhost")
+    mongo_port = os.getenv("MONGO_PORT", "27017")
+    mongo_auth_source = os.getenv("MONGO_AUTH_SOURCE", "admin")
+    
+    uri = f"mongodb://{mongo_user}:{mongo_password}@{mongo_host}:{mongo_port}/?authSource={mongo_auth_source}"
 
     try:
         client = MongoClient(uri, serverSelectionTimeoutMS=5000)

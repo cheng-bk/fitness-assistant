@@ -22,8 +22,6 @@ from .services.profile_service import (
     calculate_macros,
     calculate_tdee,
     enrich_profile,
-    load_or_create_profile,
-    update_profile,
 )
 
 
@@ -204,8 +202,6 @@ __all__ = [
     "calculate_tdee",
     "calculate_macros",
     "enrich_profile",
-    "update_profile",
-    "load_or_create_profile",
     "IntentInterpreterAgent",
     "PlannerAgent",
     "DecisionAgent",

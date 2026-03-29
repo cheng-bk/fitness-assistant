@@ -1,7 +1,6 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
-from ..infrastructure.database import get_database
 from ..models import ProfileAnswerInterpretation, UserProfile
 
 PROFILE_CORE_FIELDS = [
@@ -88,47 +87,6 @@ def enrich_profile(profile: UserProfile) -> UserProfile:
     return profile
 
 
-def update_profile(profile: UserProfile) -> UserProfile:
-    enriched = enrich_profile(profile)
-    try:
-        db = get_database()
-        db["user_profiles"].update_one(
-            {"user_id": enriched.user_id},
-            {"$set": enriched.model_dump()},
-            upsert=True,
-        )
-    except Exception:
-        pass
-    return enriched
-
-
-def load_profile(user_id: str) -> Optional[UserProfile]:
-    try:
-        db = get_database()
-        existing = db["user_profiles"].find_one({"user_id": user_id})
-        if existing:
-            existing.pop("_id", None)
-            return UserProfile(**existing)
-    except Exception:
-        pass
-    return None
-
-
-def load_or_create_profile(user_id: str) -> UserProfile:
-    existing = load_profile(user_id)
-    if existing:
-        return existing
-
-    return UserProfile(
-        user_id=user_id,
-        age=30,
-        weight=70.0,
-        height=175.0,
-        activity_level="moderate",
-        fitness_goal="maintenance",
-    )
-
-
 def dedupe_profile_fields(field_names: List[str]) -> List[str]:
     normalized: List[str] = []
     for field_name in field_names:
@@ -201,7 +159,7 @@ def parse_profile_modification_request(
         "gender": ["性别", "男", "女", "gender", "male", "female"],
         "activity_level": ["活动", "活动水平", "运动量", "activity"],
         "fitness_goal": ["目标", "健身目标", "减脂", "增肌", "维持", "goal"],
-        "workout_frequency": ["训练次数", "每周训练", "每周几次", "频率", "frequency"],
+        "workout_frequency": ["训练次数", "每周训练", "每周几次", "频率", "次数", "frequency"],
         "workout_duration": ["训练时长", "单次时长", "每次多久", "时长", "duration", "分钟"],
     }
 

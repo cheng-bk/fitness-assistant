@@ -1,9 +1,0 @@
-langchain-core
-langchain-openai
-langchain-community
-langgraph
-pydantic
-pymongo
-fastapi
-psutil
-faiss-gpu
