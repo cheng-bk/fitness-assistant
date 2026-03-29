@@ -116,6 +116,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--age", type=int, default=None)
     parser.add_argument("--weight", type=float, default=None)
     parser.add_argument("--height", type=float, default=None)
+    parser.add_argument("--gender", choices=["male", "female"], default=None)
     parser.add_argument("--activity-level", default=None)
     parser.add_argument("--fitness-goal", default=None)
     parser.add_argument("--workout-frequency", type=int, default=None)
@@ -129,21 +130,24 @@ def build_default_profile(args: argparse.Namespace) -> UserProfile:
     #     age=args.age,
     #     weight=args.weight,
     #     height=args.height,
+    #     gender=args.gender,
     #     activity_level=args.activity_level,
     #     fitness_goal=args.fitness_goal,
     #     workout_frequency=args.workout_frequency,
     #     workout_duration=args.workout_duration,
     # )
     return UserProfile(
-        user_id="chengbk",
+        user_id=args.user_id,
         age=23,
-        weight=76,
-        height=175,
-        activity_level="moderate",
-        fitness_goal="maintenance",
-        workout_frequency=3,
-        workout_duration=30,
+        weight=80,
+        height=160,
+        gender="male",
+        activity_level="light",
+        fitness_goal="cut",
+        workout_frequency=4,
+        workout_duration=60,
     )
+
 
 
 async def _prompt_user(question: str) -> str:

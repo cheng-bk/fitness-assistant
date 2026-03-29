@@ -18,27 +18,21 @@ def get_mongo_client() -> MongoClient:
 
     mongo_user = os.getenv("MONGO_USER")
     mongo_password = os.getenv("MONGO_PASSWORD")
-    uris: List[str] = [
-        f"mongodb://{mongo_user}:{mongo_password}@mongodb_ai_fitness_planner:27017/admin",
-        f"mongodb://{mongo_user}:{mongo_password}@localhost:27019/admin",
-    ]
+    uri = f"mongodb://{mongo_user}:{mongo_password}@localhost:27019/?authSource=admin"
 
-    last_error: Optional[Exception] = None
-    for mongo_uri in uris:
-        try:
-            client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-            client.admin.command("ping")
-            _mongo_client = client
-            return client
-        except Exception as exc:
-            last_error = exc
-
-    raise RuntimeError(f"Failed to connect to MongoDB: {last_error}")
+    try:
+        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        client.admin.command("ping")
+        _mongo_client = client
+        return client
+    except Exception as exc:
+        raise RuntimeError(f"Failed to connect to MongoDB: {exc}") from exc
+    
 
 
 def get_database():
     client = get_mongo_client()
-    return client[os.getenv("MONGO_DB_NAME", "usda_nutrition")]
+    return client[os.getenv("MONGO_DB_NAME", "fitness_assistant")]
 
 
 def get_embeddings_model() -> OpenAIEmbeddings:

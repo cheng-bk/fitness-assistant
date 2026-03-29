@@ -21,6 +21,7 @@ class OnboardingState(TypedDict):
     current_question_text: str
     latest_answer: str
     should_modify_existing: bool
+    profile_modified: bool
     done: bool
     next_node: str
 
@@ -152,7 +153,7 @@ class ProfileOnboardingGraph:
 
     async def _select_modification_fields(self, state: OnboardingState) -> OnboardingState:
         answer = await self.prompt_user(
-            "你想修改哪些信息？可以直接回复：年龄、体重、身高、活动水平、健身目标、每周训练次数、单次训练时长；多个项目一起说也可以。"
+            "你想修改哪些信息？可以直接回复：年龄、体重、身高、性别、活动水平、健身目标、每周训练次数、单次训练时长；多个项目一起说也可以。"
         )
         selected_fields = parse_profile_modification_request(answer)
         self._emit_onboarding_event(
@@ -168,6 +169,7 @@ class ProfileOnboardingGraph:
             return state
 
         state["profile"] = clear_profile_fields(state["profile"], selected_fields)
+        state["profile_modified"] = True
         state["missing_fields"] = get_missing_profile_fields(state["profile"])
         self.notify_user("好的，我们来更新这些信息。")
         state["next_node"] = "ask_missing_field" if state["missing_fields"] else "finalize_profile"
@@ -208,6 +210,7 @@ class ProfileOnboardingGraph:
         )
         if interpretation.is_valid:
             state["profile"] = apply_profile_interpretation(state["profile"], interpretation)
+            state["profile_modified"] = True
             self.notify_user(interpretation.acknowledgement)
             state["missing_fields"] = get_missing_profile_fields(state["profile"])
             state["next_node"] = "finalize_profile" if not state["missing_fields"] else "ask_missing_field"
@@ -235,7 +238,8 @@ class ProfileOnboardingGraph:
         return state
 
     async def _finalize_profile(self, state: OnboardingState) -> OnboardingState:
-        state["profile"] = update_profile(state["profile"])
+        if state["profile_modified"]:
+            state["profile"] = update_profile(state["profile"])
         if state["missing_fields"]:
             self.notify_user("还有信息未补齐，不过我先保留当前资料。")
         else:
@@ -270,6 +274,7 @@ class ProfileOnboardingGraph:
             "current_question_text": "",
             "latest_answer": "",
             "should_modify_existing": False,
+            "profile_modified": False,
             "done": False,
             "next_node": "inspect_profile",
         }

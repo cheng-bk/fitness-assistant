@@ -6,8 +6,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 
-def build_chat_model(base_url: str, model_name: str, temperature: float = 0.2) -> ChatOpenAI:
-    return ChatOpenAI(base_url=base_url, model=model_name, temperature=temperature, extra_body={"enable_thinking": False})
+def build_chat_model(base_url: str, model_name: str, temperature: float = 0.2, extra_body: dict = {"enable_thinking": False}) -> ChatOpenAI:
+    return ChatOpenAI(base_url=base_url, model=model_name, temperature=temperature, extra_body=extra_body)
 
 
 def build_structured_output_instruction(schema_model: Type[BaseModel]) -> str:

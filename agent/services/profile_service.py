@@ -8,6 +8,7 @@ PROFILE_CORE_FIELDS = [
     "age",
     "weight",
     "height",
+    "gender",
     "activity_level",
     "fitness_goal",
     "workout_frequency",
@@ -17,12 +18,15 @@ PROFILE_FIELD_LABELS = {
     "age": "年龄",
     "weight": "体重",
     "height": "身高",
+    "gender": "性别",
     "activity_level": "活动水平",
     "fitness_goal": "健身目标",
     "workout_frequency": "每周训练次数",
     "workout_duration": "单次训练时长",
 }
 PROFILE_VALUE_LABELS = {
+    "male": "男性",
+    "female": "女性",
     "sedentary": "久坐少动",
     "light": "轻度活动",
     "moderate": "中等活动",
@@ -35,9 +39,13 @@ PROFILE_VALUE_LABELS = {
 
 
 def calculate_bmr(profile: UserProfile) -> float:
-    if not all([profile.age, profile.weight, profile.height]):
+    if not all([profile.age, profile.weight, profile.height, profile.gender]):
         return 2000
-    return (10 * profile.weight) + (6.25 * profile.height) - (5 * profile.age) + 5
+
+    base = (10 * profile.weight) + (6.25 * profile.height) - (5 * profile.age)
+    if profile.gender == "female":
+        return base - 161
+    return base + 5
 
 
 def calculate_tdee(profile: UserProfile) -> float:
@@ -163,6 +171,7 @@ def format_profile_summary(profile: UserProfile, field_names: Optional[List[str]
         "age": str(profile.age) if profile.age is not None else "未填写",
         "weight": f"{profile.weight} kg" if profile.weight is not None else "未填写",
         "height": f"{profile.height} cm" if profile.height is not None else "未填写",
+        "gender": PROFILE_VALUE_LABELS.get(profile.gender or "", profile.gender or "未填写"),
         "activity_level": PROFILE_VALUE_LABELS.get(profile.activity_level or "", profile.activity_level or "未填写"),
         "fitness_goal": PROFILE_VALUE_LABELS.get(profile.fitness_goal or "", profile.fitness_goal or "未填写"),
         "workout_frequency": (
@@ -189,6 +198,7 @@ def parse_profile_modification_request(
         "age": ["年龄", "age"],
         "weight": ["体重", "weight", "公斤", "kg"],
         "height": ["身高", "height", "厘米", "cm"],
+        "gender": ["性别", "男", "女", "gender", "male", "female"],
         "activity_level": ["活动", "活动水平", "运动量", "activity"],
         "fitness_goal": ["目标", "健身目标", "减脂", "增肌", "维持", "goal"],
         "workout_frequency": ["训练次数", "每周训练", "每周几次", "频率", "frequency"],

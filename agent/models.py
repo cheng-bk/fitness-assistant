@@ -12,6 +12,7 @@ class UserProfile(BaseModel):
     age: Optional[int] = None
     weight: Optional[float] = None
     height: Optional[float] = None
+    gender: Optional[Literal["male", "female"]] = None
     activity_level: Optional[str] = "moderate"
     fitness_goal: Optional[str] = "maintenance"
     workout_frequency: Optional[int] = None
@@ -57,6 +58,7 @@ ProfileFieldName = Literal[
     "age",
     "weight",
     "height",
+    "gender",
     "activity_level",
     "fitness_goal",
     "workout_frequency",
@@ -299,6 +301,7 @@ class ProfileAnswerInterpretation(BaseModel):
     age: Optional[int] = None
     weight: Optional[float] = None
     height: Optional[float] = None
+    gender: Optional[Literal["male", "female"]] = None
     activity_level: Optional[Literal["sedentary", "light", "moderate", "active", "very_active"]] = None
     fitness_goal: Optional[Literal["cut", "bulk", "maintenance"]] = None
     workout_frequency: Optional[int] = None

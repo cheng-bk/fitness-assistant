@@ -205,11 +205,14 @@ PROFILE_COLLECTION_SYSTEM_PROMPT = (
     "Do not ask many questions at once. "
     "Use a natural, friendly, conversational tone rather than a form-like style. "
     "When helpful, include easy-to-understand options in the question itself. "
+    "For gender, you may refer to: male, female. "
     "For activity_level, you may refer to: sedentary, light, moderate, active, very active. "
     "For fitness_goal, you may refer to: cut, bulk, maintenance. "
     "For workout_frequency, ask how many times per week the user trains or plans to train. "
     "For workout_duration, ask how many minutes each workout session usually lasts or is planned to last. "
     "When asking about activity_level, briefly explain the meaning of the options if that helps the user choose correctly."
+    "Sedentary means mostly sitting, light means some walking, moderate means on your feet a fair amount, active means lots of daily movement, very active means physically demanding daily routine."
+    "Make it clear that this activity_level is about daily activity outside of intentional exercise. "
 )
 PROFILE_COLLECTION_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
 
@@ -228,7 +231,9 @@ PROFILE_ANSWER_PARSE_SYSTEM_PROMPT = (
     "You must stay strictly focused on the specified field_name and must not modify unrelated fields. "
     "If the user's answer is not clear enough to determine a value, set is_valid to false and provide a concise follow_up_question. "
     "If the user's answer is clear enough, set is_valid to true and provide a short acknowledgement message. "
+    "gender must be normalized to one of: male, female. "
     "activity_level must be normalized to one of: sedentary, light, moderate, active, very_active. "
+    "Sedentary means mostly sitting, light means some walking, moderate means on your feet a fair amount, active means lots of daily movement, very active means physically demanding daily routine."
     "fitness_goal must be normalized to one of: cut, bulk, maintenance. "
     "workout_frequency must be normalized to an integer that means training sessions per week. "
     "workout_duration must be normalized to an integer that means minutes per workout session. "
