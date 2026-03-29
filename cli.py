@@ -124,15 +124,25 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_default_profile(args: argparse.Namespace) -> UserProfile:
+    # return UserProfile(
+    #     user_id=args.user_id,
+    #     age=args.age,
+    #     weight=args.weight,
+    #     height=args.height,
+    #     activity_level=args.activity_level,
+    #     fitness_goal=args.fitness_goal,
+    #     workout_frequency=args.workout_frequency,
+    #     workout_duration=args.workout_duration,
+    # )
     return UserProfile(
-        user_id=args.user_id,
-        age=args.age,
-        weight=args.weight,
-        height=args.height,
-        activity_level=args.activity_level,
-        fitness_goal=args.fitness_goal,
-        workout_frequency=args.workout_frequency,
-        workout_duration=args.workout_duration,
+        user_id="chengbk",
+        age=23,
+        weight=76,
+        height=175,
+        activity_level="moderate",
+        fitness_goal="maintenance",
+        workout_frequency=3,
+        workout_duration=30,
     )
 
 
@@ -147,7 +157,7 @@ async def _prompt_user(question: str) -> str:
             raise SystemExit(0)
 
         if not answer:
-            print("\nAssistant>\n鎴戣繕娌℃敹鍒颁綘鐨勫洖绛旓紝鍙互鐩存帴鎸夎嚜鐒惰瑷€鍥炲銆?")
+            print("\nAssistant>\n我还在这儿，随时可以继续。")
             continue
         if answer.lower() in {"exit", "quit"}:
             print("Bye.")

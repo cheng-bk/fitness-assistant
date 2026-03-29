@@ -4,13 +4,23 @@ from typing import Any, Dict, List, Optional
 from ..infrastructure.database import get_database
 from ..models import ProfileAnswerInterpretation, UserProfile
 
-PROFILE_CORE_FIELDS = ["age", "weight", "height", "activity_level", "fitness_goal"]
+PROFILE_CORE_FIELDS = [
+    "age",
+    "weight",
+    "height",
+    "activity_level",
+    "fitness_goal",
+    "workout_frequency",
+    "workout_duration",
+]
 PROFILE_FIELD_LABELS = {
     "age": "年龄",
     "weight": "体重",
     "height": "身高",
     "activity_level": "活动水平",
     "fitness_goal": "健身目标",
+    "workout_frequency": "每周训练次数",
+    "workout_duration": "单次训练时长",
 }
 PROFILE_VALUE_LABELS = {
     "sedentary": "久坐少动",
@@ -155,6 +165,12 @@ def format_profile_summary(profile: UserProfile, field_names: Optional[List[str]
         "height": f"{profile.height} cm" if profile.height is not None else "未填写",
         "activity_level": PROFILE_VALUE_LABELS.get(profile.activity_level or "", profile.activity_level or "未填写"),
         "fitness_goal": PROFILE_VALUE_LABELS.get(profile.fitness_goal or "", profile.fitness_goal or "未填写"),
+        "workout_frequency": (
+            f"每周 {profile.workout_frequency} 次" if profile.workout_frequency is not None else "未填写"
+        ),
+        "workout_duration": (
+            f"每次 {profile.workout_duration} 分钟" if profile.workout_duration is not None else "未填写"
+        ),
     }
     lines = ["当前会使用到的资料："]
     for field_name in fields:
@@ -175,6 +191,8 @@ def parse_profile_modification_request(
         "height": ["身高", "height", "厘米", "cm"],
         "activity_level": ["活动", "活动水平", "运动量", "activity"],
         "fitness_goal": ["目标", "健身目标", "减脂", "增肌", "维持", "goal"],
+        "workout_frequency": ["训练次数", "每周训练", "每周几次", "频率", "frequency"],
+        "workout_duration": ["训练时长", "单次时长", "每次多久", "时长", "duration", "分钟"],
     }
 
     for field_name, keywords in field_keywords.items():

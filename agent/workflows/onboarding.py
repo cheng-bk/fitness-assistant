@@ -116,7 +116,7 @@ class ProfileOnboardingGraph:
             profile=state["profile"].model_dump(),
         )
         if state["missing_fields"]:
-            self.notify_user("鍏堟妸浣犵殑鍩虹淇℃伅琛ラ綈锛岃繖鏍峰悗闈㈢殑楗鍜岃缁冨缓璁會鏇村噯纭€?")
+            self.notify_user("先把你的基础信息补齐，这样后面的饮食和训练建议会更准确。")
             state["next_node"] = "ask_missing_field"
         else:
             state["next_node"] = "review_existing_profile"
@@ -131,10 +131,10 @@ class ProfileOnboardingGraph:
         )
         self.notify_user(format_profile_summary(state["profile"]))
         answer = await self.prompt_user(
-            "濡傛灉杩欎簺淇℃伅闇€瑕佷慨鏀癸紝璇峰洖澶嶁€滆淇敼鈥濓紱濡傛灉涓嶇敤淇敼锛岃鍥炲鈥滅户缁€濄€?"
+            "如果这些信息需要修改，请回复“要修改”；如果不用修改，请回复“继续”。"
         )
         normalized = answer.lower()
-        if any(token in normalized for token in ["缁х画", "涓嶇敤", "涓嶉渶瑕?", "鍚?", "no", "n"]):
+        if any(token in normalized for token in ["继续", "不用", "不需要", "否", "no", "n"]):
             state["should_modify_existing"] = False
             state["next_node"] = "finalize_profile"
         else:
@@ -152,7 +152,7 @@ class ProfileOnboardingGraph:
 
     async def _select_modification_fields(self, state: OnboardingState) -> OnboardingState:
         answer = await self.prompt_user(
-            "浣犳兂淇敼鍝簺淇℃伅锛熷彲浠ョ洿鎺ュ洖澶嶏細骞撮緞銆佷綋閲嶃€佽韩楂樸€佹椿鍔ㄦ按骞炽€佸仴韬洰鏍囷紝澶氫釜鍙互涓€璧疯銆?"
+            "你想修改哪些信息？可以直接回复：年龄、体重、身高、活动水平、健身目标、每周训练次数、单次训练时长；多个项目一起说也可以。"
         )
         selected_fields = parse_profile_modification_request(answer)
         self._emit_onboarding_event(
@@ -163,13 +163,13 @@ class ProfileOnboardingGraph:
             selected_fields=selected_fields,
         )
         if not selected_fields:
-            self.notify_user("鎴戝厛淇濈暀褰撳墠淇℃伅涓嶅彉锛屽悗闈㈠鏋滀綘鎯充慨鏀癸紝涔熷彲浠ラ噸鏂板紑濮嬩細璇濇椂璋冩暣銆?")
+            self.notify_user("我先保留当前信息不变，后面如果你想修改，也可以重新开始对话时调整。")
             state["next_node"] = "finalize_profile"
             return state
 
         state["profile"] = clear_profile_fields(state["profile"], selected_fields)
         state["missing_fields"] = get_missing_profile_fields(state["profile"])
-        self.notify_user("濂界殑锛屾垜浠潵鏇存柊杩欎簺淇℃伅銆?")
+        self.notify_user("好的，我们来更新这些信息。")
         state["next_node"] = "ask_missing_field" if state["missing_fields"] else "finalize_profile"
         return state
 
@@ -237,9 +237,9 @@ class ProfileOnboardingGraph:
     async def _finalize_profile(self, state: OnboardingState) -> OnboardingState:
         state["profile"] = update_profile(state["profile"])
         if state["missing_fields"]:
-            self.notify_user("杩樻湁淇℃伅鏈ˉ榻愶紝涓嶈繃鎴戝厛淇濈暀褰撳墠璧勬枡銆?")
+            self.notify_user("还有信息未补齐，不过我先保留当前资料。")
         else:
-            self.notify_user("鍩虹淇℃伅宸茬粡鍑嗗濂戒簡锛屾垜浠紑濮嬫寮忚亰澶┿€?")
+            self.notify_user("基础信息已经准备好了，我们开始正式聊天吧。")
         state["done"] = True
         self._emit_onboarding_event(
             "onboarding_complete",

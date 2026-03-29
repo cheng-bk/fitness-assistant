@@ -207,6 +207,8 @@ PROFILE_COLLECTION_SYSTEM_PROMPT = (
     "When helpful, include easy-to-understand options in the question itself. "
     "For activity_level, you may refer to: sedentary, light, moderate, active, very active. "
     "For fitness_goal, you may refer to: cut, bulk, maintenance. "
+    "For workout_frequency, ask how many times per week the user trains or plans to train. "
+    "For workout_duration, ask how many minutes each workout session usually lasts or is planned to last. "
     "When asking about activity_level, briefly explain the meaning of the options if that helps the user choose correctly."
 )
 PROFILE_COLLECTION_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
@@ -228,6 +230,8 @@ PROFILE_ANSWER_PARSE_SYSTEM_PROMPT = (
     "If the user's answer is clear enough, set is_valid to true and provide a short acknowledgement message. "
     "activity_level must be normalized to one of: sedentary, light, moderate, active, very_active. "
     "fitness_goal must be normalized to one of: cut, bulk, maintenance. "
+    "workout_frequency must be normalized to an integer that means training sessions per week. "
+    "workout_duration must be normalized to an integer that means minutes per workout session. "
     "If the user answers in not English, normalize it reasonably into the allowed values."
 )
 PROFILE_ANSWER_PARSE_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX

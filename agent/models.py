@@ -14,14 +14,14 @@ class UserProfile(BaseModel):
     height: Optional[float] = None
     activity_level: Optional[str] = "moderate"
     fitness_goal: Optional[str] = "maintenance"
+    workout_frequency: Optional[int] = None
+    workout_duration: Optional[int] = None
     target_calories: Optional[int] = None
     target_protein_g: Optional[float] = None
     target_carbs_g: Optional[float] = None
     target_fat_g: Optional[float] = None
     allergies: List[str] = Field(default_factory=list)
     dietary_preferences: List[str] = Field(default_factory=list)
-    workout_frequency: Optional[int] = 3
-    workout_duration: Optional[int] = 60
     equipment_available: List[str] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -53,7 +53,15 @@ class FitnessRequest(BaseModel):
     max_iterations: int = Field(default=6, ge=2, le=12)
 
 
-ProfileFieldName = Literal["age", "weight", "height", "activity_level", "fitness_goal"]
+ProfileFieldName = Literal[
+    "age",
+    "weight",
+    "height",
+    "activity_level",
+    "fitness_goal",
+    "workout_frequency",
+    "workout_duration",
+]
 
 
 class IntentAnalysis(BaseModel):
@@ -293,6 +301,8 @@ class ProfileAnswerInterpretation(BaseModel):
     height: Optional[float] = None
     activity_level: Optional[Literal["sedentary", "light", "moderate", "active", "very_active"]] = None
     fitness_goal: Optional[Literal["cut", "bulk", "maintenance"]] = None
+    workout_frequency: Optional[int] = None
+    workout_duration: Optional[int] = None
     acknowledgement: Optional[str] = None
     follow_up_question: Optional[str] = None
 
