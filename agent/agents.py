@@ -1,6 +1,7 @@
 from typing import Any, Dict, List
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import BaseTool
 
 from .llm import invoke_structured_with_retry, build_chat_model, build_structured_output_instruction
 from .models import Decision, FitnessRequest, IntentAnalysis, PlanList
@@ -154,7 +155,7 @@ class PlannerAgent:
         intent: IntentAnalysis,
         completed_steps: List[Dict[str, Any]],
         artifacts: Dict[str, Any],
-        available_tools: List[str],
+        available_tools: List[BaseTool],
     ) -> PlanList:
         return await invoke_structured_with_retry(
             self.llm,

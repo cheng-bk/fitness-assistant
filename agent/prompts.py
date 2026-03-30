@@ -1,5 +1,7 @@
 from typing import Any, Dict, List
 
+from langchain_core.tools import BaseTool
+
 SYSTEM_PROMPT_SUFFIX = "Answer in **Chinese** unless the user requests a different language."
 
 
@@ -162,20 +164,38 @@ def build_planner_user_prompt(
     intent: Dict[str, Any],
     completed_steps: List[Dict[str, Any]],
     artifacts: Dict[str, Any],
-    available_tools: List[str],
+    available_tools: List[BaseTool],
 ) -> str:
+    tool_lines: List[str] = []
+    for tool in available_tools:
+        args_schema = getattr(tool, "args_schema", None)
+        if args_schema is None:
+            args_schema_repr = "None"
+        elif hasattr(args_schema, "model_json_schema"):
+            args_schema_repr = str(args_schema.model_json_schema())
+        else:
+            args_schema_repr = str(args_schema)
+
+        tool_lines.append(
+            f"- name: {tool.name}\n"
+            f"  description: {tool.description or ''}\n"
+            f"  args_schema: {args_schema_repr}"
+        )
+
+    available_tools_text = "\n".join(tool_lines) if tool_lines else "None"
+
     return (
         f"User input: {user_input}\n"
         f"Interpreted intent: {intent}\n"
         f"Completed steps: {completed_steps}\n"
         f"Current artifact keys: {list(artifacts.keys())}\n"
-        f"Available tools: {available_tools}\n"
+        f"Available tools:\n{available_tools_text}\n"
         "Provide: "
         "1. the best current next_step; "
         "2. a short reasoning; "
         "3. optional remaining_steps. "
         "If the existing artifacts are already enough for a final answer, choose summarize_final_answer. "
-        "tool_name must come strictly from the available tool list. "
+        "tool_name must come strictly from the tool names listed above. "
         "Check for reusable artifacts before planning duplicate tool executions. "
         "If the previous step failed or produced very low value, avoid meaningless retries and choose a better path."
     )

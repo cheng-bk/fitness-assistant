@@ -148,7 +148,7 @@ class FitnessGraph:
             intent,
             state["executed_steps"],
             state["artifacts"],
-            list(self.tool_registry.keys()),
+            list(self.tool_registry.values()),
         )
         next_step = planner_output.next_step
 

@@ -107,8 +107,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Command line chat for the fitness assistant")
     parser.add_argument("--user-id", default="cli-user")
     parser.add_argument("--base-url", default=os.getenv("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"))
-    parser.add_argument("--model", default=os.getenv("MODEL_NAME", "qwen3.5-plus"))
-    parser.add_argument("--planner-model", default=None)
+    parser.add_argument("--onboarding-model", default=os.getenv("ONBOARDING_MODEL_NAME", "qwen3.5-plus"))
+    parser.add_argument("--fitness-model", default=os.getenv("FITNESS_MODEL_NAME", "qwen3.5-plus"))
+    parser.add_argument("--fitness-strong-model", default=None)
     parser.add_argument("--max-iterations", type=int, default=6)
     parser.add_argument("--use-full-database", action="store_true")
     parser.add_argument("--age", type=int, default=None)
@@ -185,7 +186,7 @@ async def interactive_chat(args: argparse.Namespace) -> None:
     profile = await run_profile_onboarding_workflow(
         profile=profile,
         base_url=args.base_url,
-        model_name=args.model,
+        model_name=args.onboarding_model,
         prompt_user=_prompt_user,
         notify_user=_notify_user,
         event_handler=event_handler,
@@ -194,8 +195,8 @@ async def interactive_chat(args: argparse.Namespace) -> None:
     # await run_fitness_workflow(
     #     profile=profile,
     #     base_url=args.base_url,
-    #     model_name=args.model,
-    #     planner_model_name=args.planner_model or args.model,
+    #     model_name=args.fitness_model,
+    #     planner_model_name=args.fitness_strong_model or args.fitness_model,
     #     prompt_user=_prompt_user,
     #     notify_user=_notify_user,
     #     event_handler=event_handler,
