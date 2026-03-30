@@ -3,8 +3,8 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .llm import invoke_structured_with_retry, build_chat_model, build_structured_output_instruction
-from .models import DecisionOutput, FitnessRequest, IntentAnalysis, PlannerOutput
-from .models import ProfileAnswerInterpretation, ProfileMemoryUpdate, ProfileQuestionOutput
+from .models import Decision, FitnessRequest, IntentAnalysis, PlanList
+from .models import ProfileAnswerInterpretation, ProfileMemoryUpdate, ProfileQuestion
 from .prompts import (
     DECISION_SYSTEM_PROMPT,
     INTENT_SYSTEM_PROMPT,
@@ -25,6 +25,61 @@ from .services.profile_service import (
     calculate_tdee,
     enrich_profile,
 )
+
+
+class ProfileCollectionAgent:
+    def __init__(self, base_url: str, model_name: str):
+        self.llm = build_chat_model(
+            base_url=base_url,
+            model_name=model_name,
+            temperature=0.2,
+        )
+
+    async def next_question(
+        self,
+        profile: Dict[str, Any],
+        missing_fields: List[str],
+    ) -> ProfileQuestion:
+        return await invoke_structured_with_retry(
+            self.llm,
+            ProfileQuestion,
+            [
+                SystemMessage(
+                    content=PROFILE_COLLECTION_SYSTEM_PROMPT
+                    + "\n\n"
+                    + build_structured_output_instruction(ProfileQuestion)
+                ),
+                HumanMessage(content=build_profile_collection_user_prompt(profile, missing_fields)),
+            ],
+        )
+
+    async def parse_answer(
+        self,
+        field_name: str,
+        question: str,
+        answer: str,
+        profile: Dict[str, Any],
+    ) -> ProfileAnswerInterpretation:
+        return await invoke_structured_with_retry(
+            self.llm,
+            ProfileAnswerInterpretation,
+            [
+                SystemMessage(
+                    content=PROFILE_ANSWER_PARSE_SYSTEM_PROMPT
+                    + "\n\n"
+                    + build_structured_output_instruction(ProfileAnswerInterpretation)
+                ),
+                HumanMessage(
+                    content=build_profile_answer_parse_user_prompt(
+                        field_name=field_name,
+                        question=question,
+                        answer=answer,
+                        profile=profile,
+                    )
+                ),
+            ],
+        )
+
 
 class IntentInterpreterAgent:
     def __init__(self, base_url: str, model_name: str):
@@ -100,15 +155,15 @@ class PlannerAgent:
         completed_steps: List[Dict[str, Any]],
         artifacts: Dict[str, Any],
         available_tools: List[str],
-    ) -> PlannerOutput:
+    ) -> PlanList:
         return await invoke_structured_with_retry(
             self.llm,
-            PlannerOutput,
+            PlanList,
             [
                 SystemMessage(
                     content=PLANNER_SYSTEM_PROMPT
                     + "\n\n"
-                    + build_structured_output_instruction(PlannerOutput)
+                    + build_structured_output_instruction(PlanList)
                 ),
                 HumanMessage(
                     content=build_planner_user_prompt(
@@ -139,15 +194,15 @@ class DecisionAgent:
         remaining_steps: List[Dict[str, Any]],
         iteration: int,
         max_iterations: int,
-    ) -> DecisionOutput:
+    ) -> Decision:
         return await invoke_structured_with_retry(
             self.llm,
-            DecisionOutput,
+            Decision,
             [
                 SystemMessage(
                     content=DECISION_SYSTEM_PROMPT
                     + "\n\n"
-                    + build_structured_output_instruction(DecisionOutput)
+                    + build_structured_output_instruction(Decision)
                 ),
                 HumanMessage(
                     content=build_decision_user_prompt(
@@ -157,60 +212,6 @@ class DecisionAgent:
                         remaining_steps,
                         iteration,
                         max_iterations,
-                    )
-                ),
-            ],
-        )
-
-
-class ProfileCollectionAgent:
-    def __init__(self, base_url: str, model_name: str):
-        self.llm = build_chat_model(
-            base_url=base_url,
-            model_name=model_name,
-            temperature=0.2,
-        )
-
-    async def next_question(
-        self,
-        profile: Dict[str, Any],
-        missing_fields: List[str],
-    ) -> ProfileQuestionOutput:
-        return await invoke_structured_with_retry(
-            self.llm,
-            ProfileQuestionOutput,
-            [
-                SystemMessage(
-                    content=PROFILE_COLLECTION_SYSTEM_PROMPT
-                    + "\n\n"
-                    + build_structured_output_instruction(ProfileQuestionOutput)
-                ),
-                HumanMessage(content=build_profile_collection_user_prompt(profile, missing_fields)),
-            ],
-        )
-
-    async def parse_answer(
-        self,
-        field_name: str,
-        question: str,
-        answer: str,
-        profile: Dict[str, Any],
-    ) -> ProfileAnswerInterpretation:
-        return await invoke_structured_with_retry(
-            self.llm,
-            ProfileAnswerInterpretation,
-            [
-                SystemMessage(
-                    content=PROFILE_ANSWER_PARSE_SYSTEM_PROMPT
-                    + "\n\n"
-                    + build_structured_output_instruction(ProfileAnswerInterpretation)
-                ),
-                HumanMessage(
-                    content=build_profile_answer_parse_user_prompt(
-                        field_name=field_name,
-                        question=question,
-                        answer=answer,
-                        profile=profile,
                     )
                 ),
             ],

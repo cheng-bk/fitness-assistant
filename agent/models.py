@@ -1,9 +1,10 @@
-import os
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+
+# Workflow inputs / outputs
 
 class WorkflowEvent(BaseModel):
     event_type: str
@@ -32,16 +33,23 @@ class UserProfile(BaseModel):
     target_protein_g: Optional[float] = None
     target_carbs_g: Optional[float] = None
     target_fat_g: Optional[float] = None
-    
     dietary_notes: List[PreferenceFlag] = Field(default_factory=list)
     equipment_notes: List[PreferenceFlag] = Field(default_factory=list)
     other_notes: List[str] = Field(default_factory=list)
-    
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    
 
-ProfileFieldName = Literal[
+
+class FitnessRequest(BaseModel):
+    user_input: str
+    user_profile: Optional[UserProfile] = None
+    use_full_database: bool = False
+    max_iterations: int = Field(default=6, ge=2, le=12)
+
+
+# Agent inputs / outputs
+
+PROFILE_FIELDS = Literal[
     "age",
     "weight",
     "height",
@@ -53,13 +61,13 @@ ProfileFieldName = Literal[
 ]
 
 
-class ProfileQuestionOutput(BaseModel):
-    field_name: ProfileFieldName
+class ProfileQuestion(BaseModel):
+    field_name: PROFILE_FIELDS
     question: str
 
 
 class ProfileAnswerInterpretation(BaseModel):
-    field_name: ProfileFieldName
+    field_name: PROFILE_FIELDS
     is_valid: bool
     age: Optional[int] = None
     weight: Optional[float] = None
@@ -71,30 +79,6 @@ class ProfileAnswerInterpretation(BaseModel):
     workout_duration: Optional[int] = None
     acknowledgement: Optional[str] = None
     follow_up_question: Optional[str] = None
-
-
-class MealPlanRequest(BaseModel):
-    """功能简介：描述 meal plan 生成请求的简化参数。"""
-
-    meal_count: int = 5
-    days: int = 7
-    preferences: Dict[str, Any] = Field(default_factory=dict)
-
-
-class WorkoutPlanRequest(BaseModel):
-    """功能简介：描述 workout plan 生成请求的简化参数。"""
-
-    split_type: str = "full_body"
-    training_style: str = "hypertrophy"
-    days_per_week: int = 3
-    duration_minutes: int = 60
-
-
-class FitnessRequest(BaseModel):
-    user_input: str
-    user_profile: Optional[UserProfile] = None
-    use_full_database: bool = False
-    max_iterations: int = Field(default=6, ge=2, le=12)
 
 
 class IntentAnalysis(BaseModel):
@@ -110,51 +94,45 @@ class IntentAnalysis(BaseModel):
 class ProfileMemoryUpdate(BaseModel):
     should_update_profile: bool = False
     reasoning: str = ""
-    
     dietary_notes: List[PreferenceFlag] = Field(default_factory=list)
     equipment_notes: List[PreferenceFlag] = Field(default_factory=list)
     other_notes: List[str] = Field(default_factory=list)
-    
     dietary_notes_to_remove: List[str] = Field(default_factory=list)
     equipment_notes_to_remove: List[str] = Field(default_factory=list)
     other_notes_to_remove: List[str] = Field(default_factory=list)
-    
     acknowledgement: Optional[str] = None
+
+
+TOOL_NAME = Literal[
+    "prepare_profile",
+    "search_food_candidates",
+    "generate_meal_plan",
+    "generate_workout_plan",
+    "summarize_final_answer",
+]
 
 
 class PlanStep(BaseModel):
     id: str
-    tool_name: Literal[
-        "prepare_profile",
-        "search_food_candidates",
-        "generate_meal_plan",
-        "generate_workout_plan",
-        "summarize_final_answer",
-    ]
+    tool_name: TOOL_NAME
     objective: str
     tool_input: Dict[str, Any] = Field(default_factory=dict)
     status: Literal["pending", "completed", "failed"] = "pending"
 
 
-class PlannerOutput(BaseModel):
-    """功能简介：PlannerAgent 的结构化输出，描述下一步及剩余计划。"""
-
+class PlanList(BaseModel):
     reasoning: str
     next_step: Optional[PlanStep] = None
     remaining_steps: List[PlanStep] = Field(default_factory=list)
 
 
-class DecisionOutput(BaseModel):
-    """功能简介：DecisionAgent 的结构化输出，描述 loop 下一步动作。"""
-
+class Decision(BaseModel):
     decision: Literal["continue", "replan", "finish"]
     reasoning: str
     should_finish: bool = False
 
 
 class ActionRecord(BaseModel):
-    """功能简介：记录每轮 tool 执行结果，方便调试与学习流程。"""
-
     iteration: int
     step_id: str
     tool_name: str
@@ -164,23 +142,54 @@ class ActionRecord(BaseModel):
     artifact_keys: List[str] = Field(default_factory=list)
 
 
-class AgenticFitnessResponse(BaseModel):
-    """功能简介：对外返回的 agentic 主流程响应模型。"""
+# Tool inputs / outputs
 
-    user_id: str
-    workflow_status: str
-    final_answer: str
-    iterations: int
-    intent: Optional[IntentAnalysis] = None
-    executed_steps: List[ActionRecord] = Field(default_factory=list)
+class SearchFoodCandidatesInput(BaseModel):
+    user_input: str
+    use_full_database: bool = False
+    user_profile: Optional[Dict[str, Any]] = None
+
+
+class MealPlanInput(BaseModel):
+    user_input: str
+    user_profile: Dict[str, Any]
+    meal_preferences: Dict[str, Any] = Field(default_factory=dict)
+    food_candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    base_url: str
+    model_name: str
+
+
+class MealPlanRequest(BaseModel):
+    meal_count: int = 5
+    days: int = 7
+    preferences: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkoutPlanInput(BaseModel):
+    user_input: str
+    user_profile: Dict[str, Any]
+    workout_preferences: Dict[str, Any] = Field(default_factory=dict)
+    base_url: str
+    model_name: str
+    
+
+class WorkoutPlanRequest(BaseModel):
+    split_type: str = "full_body"
+    training_style: str = "hypertrophy"
+    days_per_week: int = 3
+    duration_minutes: int = 60
+
+
+class SummarizeFinalAnswerInput(BaseModel):
+    user_input: str
     artifacts: Dict[str, Any] = Field(default_factory=dict)
-    errors: List[str] = Field(default_factory=list)
-    generated_at: datetime
+    base_url: str
+    model_name: str
 
+
+# Other shared / structured models
 
 class MealMacros(BaseModel):
-    """功能简介：描述一个 meal 或一天总计的宏量营养信息。"""
-
     calories: float
     protein_g: float
     carbs_g: float
@@ -188,8 +197,6 @@ class MealMacros(BaseModel):
 
 
 class MealFood(BaseModel):
-    """功能简介：描述 meal 中单个 food item 及其营养值。"""
-
     food_name: str
     portion: str
     calories: float
@@ -199,8 +206,6 @@ class MealFood(BaseModel):
 
 
 class Meal(BaseModel):
-    """功能简介：描述单餐结构。"""
-
     meal_name: str
     foods: List[MealFood]
     total_macros: MealMacros
@@ -208,8 +213,6 @@ class Meal(BaseModel):
 
 
 class DailyMealPlan(BaseModel):
-    """功能简介：描述某一天的 meal plan。"""
-
     day: int
     day_name: str
     meals: List[Meal]
@@ -217,8 +220,6 @@ class DailyMealPlan(BaseModel):
 
 
 class MealPlanStructured(BaseModel):
-    """功能简介：meal planning tool 期望 LLM 返回的结构化 meal plan。"""
-
     plan_name: str
     days: List[DailyMealPlan]
     target_macros: MealMacros
@@ -227,8 +228,6 @@ class MealPlanStructured(BaseModel):
 
 
 class Exercise(BaseModel):
-    """功能简介：描述单个训练动作。"""
-
     exercise_name: str
     sets: int
     reps: str
@@ -237,8 +236,6 @@ class Exercise(BaseModel):
 
 
 class WorkoutDay(BaseModel):
-    """功能简介：描述某一天的训练安排。"""
-
     day: int
     day_name: str
     focus: str
@@ -249,8 +246,6 @@ class WorkoutDay(BaseModel):
 
 
 class WorkoutPlanStructured(BaseModel):
-    """功能简介：workout planning tool 期望 LLM 返回的结构化 workout plan。"""
-
     plan_name: str
     split_type: str
     training_style: str
@@ -261,8 +256,6 @@ class WorkoutPlanStructured(BaseModel):
 
 
 class FinalAnswerStructured(BaseModel):
-    """功能简介：final summary tool 期望 LLM 返回的结构化最终回答。"""
-
     overview: str
     completed_work: List[str] = Field(default_factory=list)
     nutrition_guidance: List[str] = Field(default_factory=list)
@@ -271,8 +264,6 @@ class FinalAnswerStructured(BaseModel):
 
 
 class NutritionQuery(BaseModel):
-    """功能简介：nutrition 检索请求模型。"""
-
     query: str
     dietary_restrictions: List[str] = Field(default_factory=list)
     macro_goals: Dict[str, float] = Field(default_factory=dict)
@@ -282,8 +273,6 @@ class NutritionQuery(BaseModel):
 
 
 class VectorSearchResponse(BaseModel):
-    """功能简介：semantic search 返回结果模型。"""
-
     query: str
     results_found: int
     results: List[Dict[str, Any]] = Field(default_factory=list)
@@ -291,8 +280,6 @@ class VectorSearchResponse(BaseModel):
 
 
 class HybridSearchResponse(BaseModel):
-    """功能简介：hybrid search 返回结果模型。"""
-
     query: str
     search_type: str = "hybrid"
     semantic_weight: float

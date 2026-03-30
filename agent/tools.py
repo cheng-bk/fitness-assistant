@@ -1,52 +1,20 @@
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from langchain_core.tools import BaseTool, StructuredTool
-from pydantic import BaseModel, Field
 
+from .models import (
+    MealPlanInput,
+    WorkoutPlanInput,
+    SearchFoodCandidatesInput,
+    SummarizeFinalAnswerInput,
+    WorkflowEvent,
+)
 from .services.tool_service import (
     generate_meal_plan_artifact,
     generate_workout_plan_artifact,
-    prepare_profile_artifact,
     search_food_candidates_artifact,
     summarize_final_answer_artifact,
 )
-from .models import WorkflowEvent
-
-
-class PrepareProfileInput(BaseModel):
-    user_id: str
-    user_profile: Optional[Dict[str, Any]] = None
-
-
-class SearchFoodCandidatesInput(BaseModel):
-    user_input: str
-    use_full_database: bool = False
-    user_profile: Optional[Dict[str, Any]] = None
-
-
-class GenerateMealPlanInput(BaseModel):
-    user_input: str
-    user_profile: Dict[str, Any]
-    meal_preferences: Dict[str, Any] = Field(default_factory=dict)
-    food_candidates: List[Dict[str, Any]] = Field(default_factory=list)
-    base_url: str
-    model_name: str
-
-
-class GenerateWorkoutPlanInput(BaseModel):
-    user_input: str
-    user_profile: Dict[str, Any]
-    workout_preferences: Dict[str, Any] = Field(default_factory=dict)
-    base_url: str
-    model_name: str
-
-
-class SummarizeFinalAnswerInput(BaseModel):
-    user_input: str
-    artifacts: Dict[str, Any] = Field(default_factory=dict)
-    base_url: str
-    model_name: str
-    
 
 async def search_food_candidates_tool(
     user_input: str,
@@ -135,7 +103,7 @@ def build_tool_registry(
                 "Use this tool when the user explicitly wants a diet plan, eating schedule, fat loss meal plan, or muscle gain meal plan. "
                 "A valid user profile should normally exist first, and candidate foods are helpful when you want the plan to reflect realistic food options."
             ),
-            args_schema=GenerateMealPlanInput,
+            args_schema=MealPlanInput,
         ),
         StructuredTool.from_function(
             coroutine=generate_workout_plan_tool,
@@ -145,7 +113,7 @@ def build_tool_registry(
                 "Use this tool when the user wants a training schedule, weekly routine, equipment-constrained plan, muscle gain program, or fat loss training plan. "
                 "A user profile should normally be prepared first so the plan can reflect frequency, duration, goal, and equipment constraints."
             ),
-            args_schema=GenerateWorkoutPlanInput,
+            args_schema=WorkoutPlanInput,
         ),
         StructuredTool.from_function(
             coroutine=summarize_final_answer_tool,
