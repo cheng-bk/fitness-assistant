@@ -22,27 +22,7 @@ from ..prompts import (
     build_workout_plan_user_prompt,
 )
 from ..repositories.food_repository import find_foods_by_text
-from ..repositories.profile_repository import load_profile, upsert_profile
 from ..services.nutrition_service import format_mongo_food_summary, semantic_food_search
-from ..services.profile_service import enrich_profile
-
-
-async def prepare_profile_artifact(
-    user_id: str,
-    user_profile: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    profile = UserProfile(**user_profile) if user_profile else load_profile(user_id)
-    profile.user_id = user_id
-    enriched = enrich_profile(profile)
-    enriched = upsert_profile(enriched)
-    return {
-        "user_profile": enriched.model_dump(),
-        "observation": (
-            f"Profile is ready with targets of {enriched.target_calories} kcal, "
-            f"{enriched.target_protein_g}g protein, {enriched.target_carbs_g}g carbs, "
-            f"and {enriched.target_fat_g}g fat."
-        ),
-    }
 
 
 async def search_food_candidates_artifact(
@@ -51,11 +31,11 @@ async def search_food_candidates_artifact(
     user_profile: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     profile = UserProfile(**user_profile) if user_profile else None
-    dietary_preferences = profile.dietary_preferences if profile else []
+    dietary_restrictions = [item.name for item in (profile.dietary_notes if profile else []) if not item.enabled]
     macro_goals: Dict[str, float] = {}
     if profile and (profile.target_protein_g or 0) >= 120:
         macro_goals["protein_min"] = 15
-    if profile and "keto" in [pref.lower() for pref in profile.dietary_preferences]:
+    if profile and any(item.enabled and item.name.lower() == "keto" for item in profile.dietary_notes):
         macro_goals["carbs_max"] = 10
 
     try:
@@ -63,7 +43,7 @@ async def search_food_candidates_artifact(
             NutritionQuery(
                 query=user_input,
                 use_full_database=use_full_database,
-                dietary_restrictions=dietary_preferences,
+                dietary_restrictions=dietary_restrictions,
                 macro_goals=macro_goals,
                 limit=12,
                 similarity_threshold=0.2,

@@ -3,14 +3,16 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .llm import invoke_structured_with_retry, build_chat_model, build_structured_output_instruction
-from .models import FitnessRequest, DecisionOutput, IntentAnalysis, PlannerOutput
-from .models import ProfileAnswerInterpretation, ProfileQuestionOutput
+from .models import DecisionOutput, FitnessRequest, IntentAnalysis, PlannerOutput
+from .models import ProfileAnswerInterpretation, ProfileMemoryUpdate, ProfileQuestionOutput
 from .prompts import (
     DECISION_SYSTEM_PROMPT,
     INTENT_SYSTEM_PROMPT,
+    MEMORY_UPDATE_SYSTEM_PROMPT,
     PLANNER_SYSTEM_PROMPT,
     PROFILE_ANSWER_PARSE_SYSTEM_PROMPT,
     PROFILE_COLLECTION_SYSTEM_PROMPT,
+    build_memory_update_user_prompt,
     build_decision_user_prompt,
     build_intent_user_prompt,
     build_planner_user_prompt,
@@ -24,26 +26,15 @@ from .services.profile_service import (
     enrich_profile,
 )
 
-
-def _get_profile_preferences(request: FitnessRequest) -> tuple[Dict[str, Any], Dict[str, Any]]:
-    profile = request.user_profile
-    if profile is None:
-        return {}, {}
-    meal_preferences = getattr(profile, "meal_preferences", {}) or {}
-    workout_preferences = getattr(profile, "workout_preferences", {}) or {}
-    return meal_preferences, workout_preferences
-
-
 class IntentInterpreterAgent:
     def __init__(self, base_url: str, model_name: str):
         self.llm = build_chat_model(
             base_url=base_url,
             model_name=model_name,
-            temperature=0.1,
+            temperature=0.2,
         )
 
     async def run(self, request: FitnessRequest) -> IntentAnalysis:
-        meal_preferences, workout_preferences = _get_profile_preferences(request)
         return await invoke_structured_with_retry(
             self.llm,
             IntentAnalysis,
@@ -56,8 +47,38 @@ class IntentInterpreterAgent:
                 HumanMessage(
                     content=build_intent_user_prompt(
                         request.user_input,
-                        meal_preferences,
-                        workout_preferences,
+                        request.user_profile.model_dump() if request.user_profile else {},
+                    )
+                ),
+            ],
+        )
+
+
+class MemoryAgent:
+    def __init__(self, base_url: str, model_name: str):
+        self.llm = build_chat_model(
+            base_url=base_url,
+            model_name=model_name,
+            temperature=0.2,
+        )
+
+    async def run(
+        self,
+        request: FitnessRequest,
+    ) -> ProfileMemoryUpdate:
+        return await invoke_structured_with_retry(
+            self.llm,
+            ProfileMemoryUpdate,
+            [
+                SystemMessage(
+                    content=MEMORY_UPDATE_SYSTEM_PROMPT
+                    + "\n\n"
+                    + build_structured_output_instruction(ProfileMemoryUpdate)
+                ),
+                HumanMessage(
+                    content=build_memory_update_user_prompt(
+                        request.user_input,
+                        request.user_profile.model_dump() if request.user_profile else {},
                     )
                 ),
             ],
@@ -203,6 +224,7 @@ __all__ = [
     "calculate_macros",
     "enrich_profile",
     "IntentInterpreterAgent",
+    "MemoryAgent",
     "PlannerAgent",
     "DecisionAgent",
     "ProfileCollectionAgent",

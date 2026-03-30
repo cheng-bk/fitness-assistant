@@ -5,9 +5,20 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-class UserProfile(BaseModel):
-    """功能简介：描述用户基础信息、营养目标与训练偏好的核心数据模型。"""
+class WorkflowEvent(BaseModel):
+    event_type: str
+    phase: Literal["onboarding", "main_workflow"]
+    node: str
+    summary: str
+    data: Dict[str, Any] = Field(default_factory=dict)
 
+
+class PreferenceFlag(BaseModel):
+    name: str
+    enabled: bool
+
+
+class UserProfile(BaseModel):
     user_id: str
     age: Optional[int] = None
     weight: Optional[float] = None
@@ -21,11 +32,45 @@ class UserProfile(BaseModel):
     target_protein_g: Optional[float] = None
     target_carbs_g: Optional[float] = None
     target_fat_g: Optional[float] = None
-    allergies: List[str] = Field(default_factory=list)
-    dietary_preferences: List[str] = Field(default_factory=list)
-    equipment_available: List[str] = Field(default_factory=list)
+    
+    dietary_notes: List[PreferenceFlag] = Field(default_factory=list)
+    equipment_notes: List[PreferenceFlag] = Field(default_factory=list)
+    other_notes: List[str] = Field(default_factory=list)
+    
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    
+
+ProfileFieldName = Literal[
+    "age",
+    "weight",
+    "height",
+    "gender",
+    "activity_level",
+    "fitness_goal",
+    "workout_frequency",
+    "workout_duration",
+]
+
+
+class ProfileQuestionOutput(BaseModel):
+    field_name: ProfileFieldName
+    question: str
+
+
+class ProfileAnswerInterpretation(BaseModel):
+    field_name: ProfileFieldName
+    is_valid: bool
+    age: Optional[int] = None
+    weight: Optional[float] = None
+    height: Optional[float] = None
+    gender: Optional[Literal["male", "female"]] = None
+    activity_level: Optional[Literal["sedentary", "light", "moderate", "active", "very_active"]] = None
+    fitness_goal: Optional[Literal["cut", "bulk", "maintenance"]] = None
+    workout_frequency: Optional[int] = None
+    workout_duration: Optional[int] = None
+    acknowledgement: Optional[str] = None
+    follow_up_question: Optional[str] = None
 
 
 class MealPlanRequest(BaseModel):
@@ -46,41 +91,38 @@ class WorkoutPlanRequest(BaseModel):
 
 
 class FitnessRequest(BaseModel):
-    """功能简介：agentic 主流程入口请求模型。"""
-
     user_input: str
     user_profile: Optional[UserProfile] = None
     use_full_database: bool = False
     max_iterations: int = Field(default=6, ge=2, le=12)
 
 
-ProfileFieldName = Literal[
-    "age",
-    "weight",
-    "height",
-    "gender",
-    "activity_level",
-    "fitness_goal",
-    "workout_frequency",
-    "workout_duration",
-]
-
-
 class IntentAnalysis(BaseModel):
-    """功能简介：IntentInterpreterAgent 输出的结构化意图。"""
-
     primary_goal: str
-    needs_profile_update: bool = True
-    needs_nutrition_search: bool = True
-    generate_meal_plan: bool = True
-    generate_workout_plan: bool = True
+    needs_profile_update: bool = False
+    needs_nutrition_search: bool = False
+    generate_meal_plan: bool = False
+    generate_workout_plan: bool = False
     answer_directly: bool = False
     success_criteria: List[str] = Field(default_factory=list)
 
 
-class PlanStep(BaseModel):
-    """功能简介：PlannerAgent 生成的单个工具执行步骤。"""
+class ProfileMemoryUpdate(BaseModel):
+    should_update_profile: bool = False
+    reasoning: str = ""
+    
+    dietary_notes: List[PreferenceFlag] = Field(default_factory=list)
+    equipment_notes: List[PreferenceFlag] = Field(default_factory=list)
+    other_notes: List[str] = Field(default_factory=list)
+    
+    dietary_notes_to_remove: List[str] = Field(default_factory=list)
+    equipment_notes_to_remove: List[str] = Field(default_factory=list)
+    other_notes_to_remove: List[str] = Field(default_factory=list)
+    
+    acknowledgement: Optional[str] = None
 
+
+class PlanStep(BaseModel):
     id: str
     tool_name: Literal[
         "prepare_profile",
@@ -257,62 +299,3 @@ class HybridSearchResponse(BaseModel):
     traditional_weight: float
     results_found: int
     results: List[Dict[str, Any]] = Field(default_factory=list)
-
-
-class IndexStatus(BaseModel):
-    """功能简介：单个向量索引的状态信息。"""
-
-    exists: bool
-    loaded: bool
-    loading: bool
-    index_size: Optional[int] = None
-    embedding_dimension: Optional[int] = None
-    file_size_mb: Optional[float] = None
-    last_modified: Optional[str] = None
-    error: Optional[str] = None
-    memory_usage_mb: Optional[float] = None
-
-
-class VectorIndexStatusResponse(BaseModel):
-    """功能简介：所有向量索引与系统资源的综合状态响应。"""
-
-    full_database: IndexStatus
-    sample_database: IndexStatus
-    legacy_index: IndexStatus
-    system_info: Dict[str, Any]
-
-
-class DatabaseAvailabilityResponse(BaseModel):
-    """功能简介：描述 full/sample 数据库集合是否可用。"""
-
-    full_database: Dict[str, Any]
-    sample_database: Dict[str, Any]
-    recommendation: str
-
-
-class ProfileQuestionOutput(BaseModel):
-    field_name: ProfileFieldName
-    question: str
-
-
-class ProfileAnswerInterpretation(BaseModel):
-    field_name: ProfileFieldName
-    is_valid: bool
-    age: Optional[int] = None
-    weight: Optional[float] = None
-    height: Optional[float] = None
-    gender: Optional[Literal["male", "female"]] = None
-    activity_level: Optional[Literal["sedentary", "light", "moderate", "active", "very_active"]] = None
-    fitness_goal: Optional[Literal["cut", "bulk", "maintenance"]] = None
-    workout_frequency: Optional[int] = None
-    workout_duration: Optional[int] = None
-    acknowledgement: Optional[str] = None
-    follow_up_question: Optional[str] = None
-
-
-class WorkflowEvent(BaseModel):
-    event_type: str
-    phase: Literal["onboarding", "main_workflow"]
-    node: str
-    summary: str
-    data: Dict[str, Any] = Field(default_factory=dict)

@@ -46,11 +46,7 @@ class SummarizeFinalAnswerInput(BaseModel):
     artifacts: Dict[str, Any] = Field(default_factory=dict)
     base_url: str
     model_name: str
-
-
-async def prepare_profile_tool(user_id: str, user_profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    return await prepare_profile_artifact(user_id=user_id, user_profile=user_profile)
-
+    
 
 async def search_food_candidates_tool(
     user_input: str,
@@ -121,16 +117,6 @@ def build_tool_registry(
     event_handler: Optional[Callable[[WorkflowEvent], None]] = None,
 ) -> Dict[str, BaseTool]:
     tools: List[BaseTool] = [
-        StructuredTool.from_function(
-            coroutine=prepare_profile_tool,
-            name="prepare_profile",
-            description=(
-                "Prepare the user profile artifact. "
-                "Use this tool to read, enrich, calculate, and persist profile information such as body data, calorie targets, and macro targets. "
-                "Prefer this tool whenever later planning or nutrition search depends on a reliable user profile."
-            ),
-            args_schema=PrepareProfileInput,
-        ),
         StructuredTool.from_function(
             coroutine=search_food_candidates_tool,
             name="search_food_candidates",

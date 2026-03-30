@@ -257,16 +257,16 @@ class ProfileOnboardingGraph:
         return state
 
     def _route_after_inspection(self, state: OnboardingState) -> str:
-        return state["next_node"]
+        return state.get("next_node", "review_existing_profile")
 
     def _route_after_review(self, state: OnboardingState) -> str:
-        return state["next_node"]
+        return state.get("next_node", "finalize_profile")
 
     def _route_after_field_selection(self, state: OnboardingState) -> str:
-        return state["next_node"]
+        return state.get("next_node", "finalize_profile")
 
     def _route_after_answer_parse(self, state: OnboardingState) -> str:
-        return state["next_node"]
+        return state.get("next_node", "finalize_profile")
 
     async def run(self, profile: UserProfile) -> UserProfile:
         initial_state: OnboardingState = {

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from ..models import ProfileAnswerInterpretation, UserProfile
+from ..models import PreferenceFlag, ProfileAnswerInterpretation, ProfileMemoryUpdate, UserProfile
 
 PROFILE_CORE_FIELDS = [
     "age",
@@ -117,6 +117,74 @@ def apply_profile_interpretation(
     return profile
 
 
+def _normalize_flag_name(name: str) -> str:
+    return name.strip().lower()
+
+
+def _merge_preference_flags(
+    existing: List[PreferenceFlag],
+    updates: List[PreferenceFlag],
+    names_to_remove: List[str],
+) -> List[PreferenceFlag]:
+    merged: Dict[str, PreferenceFlag] = {}
+    for item in existing:
+        key = _normalize_flag_name(item.name)
+        if key:
+            merged[key] = PreferenceFlag(name=item.name.strip(), enabled=item.enabled)
+    for item in updates:
+        key = _normalize_flag_name(item.name)
+        if key:
+            merged[key] = PreferenceFlag(name=item.name.strip(), enabled=item.enabled)
+    for name in names_to_remove:
+        key = _normalize_flag_name(name)
+        if key in merged:
+            merged.pop(key, None)
+    return list(merged.values())
+
+
+def _merge_other_notes(
+    existing: List[str],
+    notes_to_add: List[str],
+    notes_to_remove: List[str],
+) -> List[str]:
+    merged: Dict[str, str] = {note.strip().lower(): note.strip() for note in existing if note.strip()}
+
+    for note in notes_to_add:
+        cleaned = note.strip()
+        if cleaned:
+            merged[cleaned.lower()] = cleaned
+
+    for note in notes_to_remove:
+        cleaned = note.strip().lower()
+        if cleaned in merged:
+            merged.pop(cleaned, None)
+
+    return list(merged.values())
+
+
+def apply_profile_memory_update(profile: UserProfile, memory_update: ProfileMemoryUpdate) -> UserProfile:
+    if not memory_update.should_update_profile:
+        return profile
+
+    profile.dietary_notes = _merge_preference_flags(
+        profile.dietary_notes,
+        memory_update.dietary_notes,
+        memory_update.dietary_notes_to_remove,
+    )
+    profile.equipment_notes = _merge_preference_flags(
+        profile.equipment_notes,
+        memory_update.equipment_notes,
+        memory_update.equipment_notes_to_remove,
+    )
+    profile.other_notes = _merge_other_notes(
+        profile.other_notes,
+        memory_update.other_notes_to_add,
+        memory_update.other_notes_to_remove,
+    )
+    profile.updated_at = datetime.now()
+    return profile
+
+
 def clear_profile_fields(profile: UserProfile, field_names: List[str]) -> UserProfile:
     for field_name in dedupe_profile_fields(field_names):
         setattr(profile, field_name, None)
@@ -132,9 +200,7 @@ def format_profile_summary(profile: UserProfile, field_names: Optional[List[str]
         "gender": PROFILE_VALUE_LABELS.get(profile.gender or "", profile.gender or "未填写"),
         "activity_level": PROFILE_VALUE_LABELS.get(profile.activity_level or "", profile.activity_level or "未填写"),
         "fitness_goal": PROFILE_VALUE_LABELS.get(profile.fitness_goal or "", profile.fitness_goal or "未填写"),
-        "workout_frequency": (
-            f"每周 {profile.workout_frequency} 次" if profile.workout_frequency is not None else "未填写"
-        ),
+        "workout_frequency": f"每周 {profile.workout_frequency} 次" if profile.workout_frequency is not None else "未填写",
         "workout_duration": (
             f"每次 {profile.workout_duration} 分钟" if profile.workout_duration is not None else "未填写"
         ),

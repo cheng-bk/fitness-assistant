@@ -5,17 +5,18 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import Annotated
 
-from ..agents import DecisionAgent, IntentInterpreterAgent, PlannerAgent
+from ..agents import DecisionAgent, IntentInterpreterAgent, MemoryAgent, PlannerAgent
 from ..models import ActionRecord, FitnessRequest, IntentAnalysis, UserProfile, WorkflowEvent
+from ..repositories.profile_repository import upsert_profile
+from ..services.profile_service import apply_profile_memory_update
 from ..tools import build_tool_registry
 
 
 class FitnessState(TypedDict):
-    """Shared runtime state for the main fitness workflow."""
-
     messages: Annotated[List[BaseMessage], add_messages]
     request: FitnessRequest
     intent: Optional[Dict[str, Any]]
+    memory_update: Optional[Dict[str, Any]]
     active_step: Optional[Dict[str, Any]]
     remaining_steps: List[Dict[str, Any]]
     executed_steps: List[Dict[str, Any]]
@@ -29,8 +30,6 @@ class FitnessState(TypedDict):
 
 
 class FitnessGraph:
-    """Planner + tools based ReAct loop for the fitness assistant."""
-
     def __init__(
         self,
         base_url: str,
@@ -46,8 +45,9 @@ class FitnessGraph:
         self.prompt_user = prompt_user
         self.notify_user = notify_user
         self.intent_agent = IntentInterpreterAgent(base_url=base_url, model_name=model_name)
-        self.planner_agent = PlannerAgent(base_url=base_url, model_name=planner_model_name)
-        self.decision_agent = DecisionAgent(base_url=base_url, model_name=planner_model_name)
+        self.memory_agent = MemoryAgent(base_url=base_url, model_name=model_name)
+        self.planner_agent = PlannerAgent(base_url=base_url, model_name=self.planner_model_name)
+        self.decision_agent = DecisionAgent(base_url=base_url, model_name=self.planner_model_name)
         self.tool_registry = build_tool_registry()
         self.event_handler = event_handler
         self.graph = self._build_graph().compile()
@@ -71,6 +71,7 @@ class FitnessGraph:
     def _build_graph(self) -> StateGraph:
         workflow = StateGraph(FitnessState)
         workflow.add_node("intent_interpreter", self._interpret_intent)
+        workflow.add_node("memory_update", self._update_memory)
         workflow.add_node("planner", self._plan)
         workflow.add_node("action", self._act)
         workflow.add_node("observation", self._observe)
@@ -78,7 +79,15 @@ class FitnessGraph:
         workflow.add_node("finalize", self._finalize)
 
         workflow.set_entry_point("intent_interpreter")
-        workflow.add_edge("intent_interpreter", "planner")
+        workflow.add_conditional_edges(
+            "intent_interpreter",
+            self._route_after_intent,
+            {
+                "memory_update": "memory_update",
+                "planner": "planner",
+            },
+        )
+        workflow.add_edge("memory_update", "planner")
         workflow.add_edge("planner", "action")
         workflow.add_edge("action", "observation")
         workflow.add_edge("observation", "decision")
@@ -93,14 +102,43 @@ class FitnessGraph:
     async def _interpret_intent(self, state: FitnessState) -> FitnessState:
         intent = await self.intent_agent.run(state["request"])
         state["intent"] = intent.model_dump()
+        state["next_node"] = "memory_update" if intent.needs_profile_update else "planner"
         self._emit_workflow_event(
             "intent",
             "intent_interpreter",
             f"Interpreted intent: {intent.primary_goal}",
             primary_goal=intent.primary_goal,
             intent=intent.model_dump(),
+            next_node=state["next_node"],
         )
         state["messages"].append(SystemMessage(content=f"Intent interpreted: {intent.primary_goal}"))
+        return state
+
+    async def _update_memory(self, state: FitnessState) -> FitnessState:
+        request = state["request"]
+        memory_update = await self.memory_agent.run(request)
+        state["memory_update"] = memory_update.model_dump()
+
+        if memory_update.should_update_profile and request.user_profile is not None:
+            request.user_profile = apply_profile_memory_update(request.user_profile, memory_update)
+            request.user_profile = upsert_profile(request.user_profile)
+            state["artifacts"]["user_profile"] = request.user_profile.model_dump()
+            self._emit_workflow_event(
+                "memory_update",
+                "memory_update",
+                "Updated profile memory before planning",
+                memory_update=memory_update.model_dump(),
+                profile=request.user_profile.model_dump(),
+            )
+            if self.notify_user is not None and memory_update.acknowledgement:
+                self.notify_user(memory_update.acknowledgement)
+        else:
+            self._emit_workflow_event(
+                "memory_update",
+                "memory_update",
+                "No long-term profile memory changes applied",
+                memory_update=memory_update.model_dump(),
+            )
         return state
 
     async def _plan(self, state: FitnessState) -> FitnessState:
@@ -142,8 +180,6 @@ class FitnessGraph:
         request = state["request"]
         artifacts = state["artifacts"]
         profile = request.user_profile
-        meal_preferences = getattr(profile, "meal_preferences", {}) if profile else {}
-        workout_preferences = getattr(profile, "workout_preferences", {}) if profile else {}
 
         if tool_name == "prepare_profile":
             user_profile = request.user_profile.model_dump() if request.user_profile else artifacts.get("user_profile")
@@ -158,13 +194,13 @@ class FitnessGraph:
             return {
                 "user_input": request.user_input,
                 "use_full_database": request.use_full_database,
-                "user_profile": artifacts.get("user_profile"),
+                "user_profile": artifacts.get("user_profile") or (profile.model_dump() if profile else None),
             }
         if tool_name == "generate_meal_plan":
             return {
                 "user_input": request.user_input,
                 "user_profile": artifacts["user_profile"],
-                "meal_preferences": meal_preferences or {},
+                "meal_preferences": {},
                 "food_candidates": artifacts.get("food_candidates", []),
                 "base_url": self.base_url,
                 "model_name": self.model_name,
@@ -173,7 +209,7 @@ class FitnessGraph:
             return {
                 "user_input": request.user_input,
                 "user_profile": artifacts["user_profile"],
-                "workout_preferences": workout_preferences or {},
+                "workout_preferences": {},
                 "base_url": self.base_url,
                 "model_name": self.model_name,
             }
@@ -321,6 +357,9 @@ class FitnessGraph:
     def _route_after_decision(self, state: FitnessState) -> str:
         return state.get("next_node", "finalize")
 
+    def _route_after_intent(self, state: FitnessState) -> str:
+        return state.get("next_node", "planner")
+
     async def _finalize(self, state: FitnessState) -> FitnessState:
         if not state["artifacts"].get("final_answer"):
             summary_tool = self.tool_registry["summarize_final_answer"]
@@ -349,24 +388,12 @@ class FitnessGraph:
         )
         return state
 
-    async def run(self, profile: UserProfile) -> Dict[str, Any]:
-        user_input = ""
-        if not user_input.strip():
-            if self.prompt_user is None:
-                raise ValueError("user_input is empty and prompt_user was not provided.")
-            user_input = await self.prompt_user("What would you like help with today?")
-
-        request = FitnessRequest(
-            user_input=user_input,
-            user_profile=profile,
-            use_full_database=self.use_full_database,
-            max_iterations=self.max_iterations,
-        )
-
+    async def run(self, request: FitnessRequest) -> Dict[str, Any]:
         initial_state: FitnessState = {
             "messages": [HumanMessage(content=request.user_input)],
             "request": request,
             "intent": None,
+            "memory_update": None,
             "active_step": None,
             "remaining_steps": [],
             "executed_steps": [],
