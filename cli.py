@@ -52,7 +52,7 @@ def _build_event_handler():
             print(f"- remaining_missing_fields: {payload.get('missing_fields')}")
             
         elif event_type == "onboarding_retry":
-            print(f"- field_name: {payload.get('field_name')}")
+            print(f"- field_name: \n{payload.get('field_name')}")
             
         elif event_type == "onboarding_complete":
             print(f"- profile: {_format_json(payload.get('profile'))}")
@@ -61,6 +61,9 @@ def _build_event_handler():
         
         elif event_type == "intent":
             print(f"- primary_goal: {payload.get('primary_goal')}")
+            
+        elif event_type == "memory_update":
+            print(f"- current profile: \n{_format_json(payload.get('profile'))}")
             
         elif event_type == "plan":
             active_step = payload.get("active_step") or {}

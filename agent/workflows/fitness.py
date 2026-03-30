@@ -34,10 +34,10 @@ class FitnessGraph:
         self,
         base_url: str,
         model_name: str,
-        planner_model_name: Optional[str] = None,
-        prompt_user: Optional[Callable[[str], Awaitable[str]]] = None,
-        notify_user: Optional[Callable[[str], None]] = None,
+        prompt_user: Callable[[str], Awaitable[str]],
+        notify_user: Callable[[str], None],
         event_handler: Optional[Callable[[WorkflowEvent], None]] = None,
+        planner_model_name: Optional[str] = None,
     ):
         self.base_url = base_url
         self.model_name = model_name
@@ -130,7 +130,7 @@ class FitnessGraph:
                 memory_update=memory_update.model_dump(),
                 profile=request.user_profile.model_dump(),
             )
-            if self.notify_user is not None and memory_update.acknowledgement:
+            if memory_update.acknowledgement:
                 self.notify_user(memory_update.acknowledgement)
         else:
             self._emit_workflow_event(
