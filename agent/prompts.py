@@ -145,12 +145,13 @@ PLANNER_SYSTEM_PROMPT = (
     "Follow these principles: advance the workflow one important step at a time; "
     "avoid rigid, overly long plans; "
     "reuse existing artifacts whenever possible; "
-    "if the current information is already enough to answer the user, prefer summarize_final_answer; "
+    "do not include final answer synthesis as a tool step because summary is handled separately after decision; "
     "if a downstream tool depends on prerequisites, prepare those first; "
     "remaining_steps should be short, realistic, and executable rather than a long document; "
     "if the current path is inefficient because of missing prerequisites, weak information, or previous tool failure, adjust strategy instead of repeating the same step blindly; "
     "when the user is mainly asking for explanation, advice, or summary, minimize unnecessary tool usage; "
-    "when the user explicitly wants a detailed meal plan or workout plan, choose the corresponding planning tool. "
+    "when the user explicitly wants a detailed meal plan or workout plan, choose the corresponding planning tool; "
+    "if no more tool work is needed, return next_step as null. "
     "Focus on what the best next step is now, not on every theoretical thing the system could do."
 )
 PLANNER_SYSTEM_PROMPT += (
@@ -169,13 +170,6 @@ PLANNER_SYSTEM_PROMPT += (
     '      "id": "meal_plan",\n'
     '      "tool_name": "generate_meal_plan",\n'
     '      "objective": "Generate a structured meal plan using the profile and food candidates.",\n'
-    '      "tool_input": {},\n'
-    '      "status": "pending"\n'
-    "    },\n"
-    "    {\n"
-    '      "id": "final_summary",\n'
-    '      "tool_name": "summarize_final_answer",\n'
-    '      "objective": "Summarize the completed artifacts into a final user-facing answer.",\n'
     '      "tool_input": {},\n'
     '      "status": "pending"\n'
     "    }\n"
@@ -221,7 +215,7 @@ def build_planner_user_prompt(
         "1. the best current next_step; "
         "2. a short reasoning; "
         "3. optional remaining_steps. "
-        "If the existing artifacts are already enough for a final answer, choose summarize_final_answer. "
+        "If the existing artifacts are already enough and no more tool work is needed, return next_step as null. "
         "tool_name must come strictly from the tool names listed above. "
         "Check for reusable artifacts before planning duplicate tool executions. "
         "If the previous step failed or produced very low value, avoid meaningless retries and choose a better path."

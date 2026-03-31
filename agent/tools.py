@@ -1,4 +1,4 @@
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import BaseTool, StructuredTool
 
@@ -6,14 +6,11 @@ from .models import (
     MealPlanInput,
     WorkoutPlanInput,
     SearchFoodCandidatesInput,
-    SummarizeFinalAnswerInput,
-    WorkflowEvent,
 )
 from .services.tool_service import (
     generate_meal_plan_artifact,
     generate_workout_plan_artifact,
     search_food_candidates_artifact,
-    summarize_final_answer_artifact,
 )
 
 async def search_food_candidates_tool(
@@ -62,27 +59,7 @@ async def generate_workout_plan_tool(
     )
 
 
-async def summarize_final_answer_tool(
-    user_input: str,
-    artifacts: Optional[Dict[str, Any]] = None,
-    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model_name: str = "gpt-4o-mini",
-) -> Dict[str, Any]:
-    return await summarize_final_answer_artifact(
-        user_input=user_input,
-        artifacts=artifacts,
-        base_url=base_url,
-        model_name=model_name,
-    )
-
-
 def build_tool_registry(
-    *,
-    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model_name: str = "gpt-4o-mini",
-    prompt_user: Optional[Callable[[str], Awaitable[str]]] = None,
-    notify_user: Optional[Callable[[str], None]] = None,
-    event_handler: Optional[Callable[[WorkflowEvent], None]] = None,
 ) -> Dict[str, BaseTool]:
     tools: List[BaseTool] = [
         StructuredTool.from_function(
@@ -114,16 +91,6 @@ def build_tool_registry(
                 "A user profile should normally be prepared first so the plan can reflect frequency, duration, goal, and equipment constraints."
             ),
             args_schema=WorkoutPlanInput,
-        ),
-        StructuredTool.from_function(
-            coroutine=summarize_final_answer_tool,
-            name="summarize_final_answer",
-            description=(
-                "Summarize the final answer for the user. "
-                "Use this tool to turn the current artifacts into the final user-facing response when the system already has enough information. "
-                "It is suitable both at the end of a completed workflow and when limited information is still sufficient for a concise answer and next-step guidance."
-            ),
-            args_schema=SummarizeFinalAnswerInput,
         ),
     ]
     return {tool.name: tool for tool in tools}

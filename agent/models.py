@@ -108,7 +108,6 @@ TOOL_NAME = Literal[
     "search_food_candidates",
     "generate_meal_plan",
     "generate_workout_plan",
-    "summarize_final_answer",
 ]
 
 
@@ -178,13 +177,6 @@ class WorkoutPlanRequest(BaseModel):
     training_style: str = "hypertrophy"
     days_per_week: int = 3
     duration_minutes: int = 60
-
-
-class SummarizeFinalAnswerInput(BaseModel):
-    user_input: str
-    artifacts: Dict[str, Any] = Field(default_factory=dict)
-    base_url: str
-    model_name: str
 
 
 # Other shared / structured models

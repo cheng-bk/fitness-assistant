@@ -3,9 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from ..llm import invoke_structured_with_retry, build_chat_model, build_structured_output_instruction
 from ..models import (
-    FinalAnswerStructured,
     MealPlanRequest,
     MealPlanStructured,
     NutritionQuery,
@@ -14,13 +12,13 @@ from ..models import (
     WorkoutPlanStructured,
 )
 from ..prompts import (
-    FINAL_ANSWER_SYSTEM_PROMPT,
     MEAL_PLAN_SYSTEM_PROMPT,
     WORKOUT_PLAN_SYSTEM_PROMPT,
-    build_final_answer_user_prompt,
     build_meal_plan_user_prompt,
     build_workout_plan_user_prompt,
 )
+
+from ..llm import invoke_structured_with_retry, build_chat_model, build_structured_output_instruction
 from ..repositories.food_repository import find_foods_by_text
 from ..services.nutrition_service import format_mongo_food_summary, semantic_food_search
 
@@ -182,48 +180,4 @@ async def generate_workout_plan_artifact(
             "generated_at": datetime.now().isoformat(),
         },
         "observation": f"Workout plan tool generated a {workout_request.days_per_week}-day program.",
-    }
-
-
-async def summarize_final_answer_artifact(
-    user_input: str,
-    artifacts: Optional[Dict[str, Any]] = None,
-    base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model_name: str = "gpt-4o-mini",
-) -> Dict[str, Any]:
-    llm = build_chat_model(
-        base_url=base_url,
-        model_name=model_name,
-        temperature=0.3,
-    )
-    final_answer = await invoke_structured_with_retry(
-        llm,
-        FinalAnswerStructured,
-        [
-            SystemMessage(
-                content=FINAL_ANSWER_SYSTEM_PROMPT
-                + "\n\n"
-                + build_structured_output_instruction(FinalAnswerStructured)
-            ),
-            HumanMessage(content=build_final_answer_user_prompt(user_input, artifacts or {})),
-        ],
-    )
-
-    lines: List[str] = [final_answer.overview]
-    if final_answer.completed_work:
-        lines.append("Completed work:")
-        lines.extend(f"- {item}" for item in final_answer.completed_work)
-    if final_answer.nutrition_guidance:
-        lines.append("Nutrition guidance:")
-        lines.extend(f"- {item}" for item in final_answer.nutrition_guidance)
-    if final_answer.training_guidance:
-        lines.append("Training guidance:")
-        lines.extend(f"- {item}" for item in final_answer.training_guidance)
-    if final_answer.next_steps:
-        lines.append("Next steps:")
-        lines.extend(f"- {item}" for item in final_answer.next_steps)
-
-    return {
-        "final_answer": "\n".join(lines),
-        "observation": "Final summary tool produced the final answer.",
     }

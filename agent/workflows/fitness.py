@@ -5,7 +5,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import Annotated
 
-from ..agents import DecisionAgent, IntentInterpreterAgent, MemoryAgent, PlannerAgent
+from ..agents import DecisionAgent, IntentInterpreterAgent, MemoryAgent, PlannerAgent, SummaryAgent
 from ..models import ActionRecord, FitnessRequest, IntentAnalysis, UserProfile, WorkflowEvent
 from ..repositories.profile_repository import upsert_profile
 from ..services.profile_service import apply_profile_memory_update
@@ -48,6 +48,7 @@ class FitnessGraph:
         self.memory_agent = MemoryAgent(base_url=base_url, model_name=model_name)
         self.planner_agent = PlannerAgent(base_url=base_url, model_name=self.planner_model_name)
         self.decision_agent = DecisionAgent(base_url=base_url, model_name=self.planner_model_name)
+        self.summary_agent = SummaryAgent(base_url=base_url, model_name=model_name)
         self.tool_registry = build_tool_registry()
         self.event_handler = event_handler
         self.graph = self._build_graph().compile()
@@ -88,7 +89,11 @@ class FitnessGraph:
             },
         )
         workflow.add_edge("memory_update", "planner")
-        workflow.add_edge("planner", "action")
+        workflow.add_conditional_edges(
+            "planner",
+            self._route_after_plan,
+            {"action": "action", "decision": "decision"},
+        )
         workflow.add_edge("action", "observation")
         workflow.add_edge("observation", "decision")
         workflow.add_conditional_edges(
@@ -152,23 +157,13 @@ class FitnessGraph:
         )
         next_step = planner_output.next_step
 
-        if next_step is None:
-            state["active_step"] = {
-                "id": "summary",
-                "tool_name": "summarize_final_answer",
-                "objective": "Synthesize the current artifacts into a final answer.",
-                "tool_input": {},
-                "status": "pending",
-            }
-            state["remaining_steps"] = []
-        else:
-            state["active_step"] = next_step.model_dump()
-            state["remaining_steps"] = [step.model_dump() for step in planner_output.remaining_steps]
+        state["active_step"] = next_step.model_dump() if next_step is not None else None
+        state["remaining_steps"] = [step.model_dump() for step in planner_output.remaining_steps]
 
         self._emit_workflow_event(
             "plan",
             "planner",
-            f"Planned next tool: {state['active_step'].get('tool_name', 'none')}",
+            f"Planned next tool: {(state['active_step'] or {}).get('tool_name', 'none')}",
             reasoning=planner_output.reasoning,
             active_step=state["active_step"],
             remaining_steps=state["remaining_steps"],
@@ -210,13 +205,6 @@ class FitnessGraph:
                 "user_input": request.user_input,
                 "user_profile": artifacts["user_profile"],
                 "workout_preferences": {},
-                "base_url": self.base_url,
-                "model_name": self.model_name,
-            }
-        if tool_name == "summarize_final_answer":
-            return {
-                "user_input": request.user_input,
-                "artifacts": artifacts,
                 "base_url": self.base_url,
                 "model_name": self.model_name,
             }
@@ -360,20 +348,34 @@ class FitnessGraph:
     def _route_after_intent(self, state: FitnessState) -> str:
         return state.get("next_node", "planner")
 
+    def _route_after_plan(self, state: FitnessState) -> str:
+        return "action" if state.get("active_step") else "decision"
+
     async def _finalize(self, state: FitnessState) -> FitnessState:
         if not state["artifacts"].get("final_answer"):
-            summary_tool = self.tool_registry["summarize_final_answer"]
-            final_result = await summary_tool.ainvoke(
-                {
-                    "user_input": state["request"].user_input,
-                    "artifacts": state["artifacts"],
-                    "base_url": self.base_url,
-                    "model_name": self.model_name,
-                }
+            self._emit_workflow_event(
+                "summary_start",
+                "finalize",
+                "Starting summary agent",
+                iteration=state["iterations"],
+                artifact_keys=list(state["artifacts"].keys()),
+            )
+            final_result = await self.summary_agent.run(
+                user_input=state["request"].user_input,
+                artifacts=state["artifacts"],
             )
             final_artifact = dict(final_result)
-            final_artifact.pop("observation", None)
+            observation = final_artifact.pop("observation", "Summary agent completed.")
             state["artifacts"].update(final_artifact)
+            state["latest_observation"] = observation
+            self._emit_workflow_event(
+                "summary_result",
+                "finalize",
+                "Completed summary agent",
+                iteration=state["iterations"],
+                observation=observation,
+                artifact_keys=list(final_artifact.keys()),
+            )
 
         state["final_answer"] = state["artifacts"].get(
             "final_answer", "The workflow completed without a final answer."
