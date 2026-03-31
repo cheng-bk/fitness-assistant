@@ -176,15 +176,6 @@ class FitnessGraph:
         artifacts = state["artifacts"]
         profile = request.user_profile
 
-        if tool_name == "prepare_profile":
-            user_profile = request.user_profile.model_dump() if request.user_profile else artifacts.get("user_profile")
-            user_id = (request.user_profile.user_id if request.user_profile else None) or artifacts.get(
-                "user_profile", {}
-            ).get("user_id")
-            return {
-                "user_id": user_id,
-                "user_profile": user_profile,
-            }
         if tool_name == "search_food_candidates":
             return {
                 "user_input": request.user_input,
@@ -209,6 +200,12 @@ class FitnessGraph:
                 "model_name": self.model_name,
             }
         raise ValueError(f"Unknown tool: {tool_name}")
+
+    def _set_active_step_status(self, state: FitnessState, status: str) -> None:
+        active_step = state.get("active_step")
+        if active_step is None:
+            return
+        active_step["status"] = status
 
     async def _act(self, state: FitnessState) -> FitnessState:
         step = state.get("active_step") or {}
@@ -235,6 +232,7 @@ class FitnessGraph:
             observation = new_artifacts.pop("observation", f"Tool {tool_name} completed.")
             state["artifacts"].update(new_artifacts)
             state["latest_observation"] = observation
+            self._set_active_step_status(state, "completed")
             self._emit_workflow_event(
                 "tool_result",
                 "action",
@@ -259,6 +257,7 @@ class FitnessGraph:
             error_message = f"{tool_name} failed: {exc}"
             state["errors"].append(error_message)
             state["latest_observation"] = error_message
+            self._set_active_step_status(state, "failed")
             self._emit_workflow_event(
                 "tool_error",
                 "action",
