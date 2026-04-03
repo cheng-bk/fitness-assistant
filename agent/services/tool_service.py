@@ -6,7 +6,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from ..models import (
     MealPlanRequest,
     MealPlanStructured,
-    NutritionQuery,
     UserProfile,
     WorkoutPlanRequest,
     WorkoutPlanStructured,
@@ -20,53 +19,103 @@ from ..prompts import (
 
 from ..llm import invoke_structured_with_retry, build_chat_model, build_structured_output_instruction
 from ..repositories.food_repository import find_foods_by_text
-from ..services.nutrition_service import format_mongo_food_summary, semantic_food_search
+from ..services.nutrition_service import build_meal_candidate_bundle, format_mongo_food_summary
 
 
 async def search_food_candidates_artifact(
     user_input: str,
-    use_full_database: bool = False,
+    food_types: Optional[List[str]] = None,
     user_profile: Optional[Dict[str, Any]] = None,
+    protein_min: Optional[float] = None,
+    carbs_min: Optional[float] = None,
+    carbs_max: Optional[float] = None,
+    calories_max: Optional[float] = None,
+    limit_per_slot: int = 6,
 ) -> Dict[str, Any]:
     profile = UserProfile(**user_profile) if user_profile else None
     dietary_restrictions = [item.name for item in (profile.dietary_notes if profile else []) if not item.enabled]
     macro_goals: Dict[str, float] = {}
-    if profile and (profile.target_protein_g or 0) >= 120:
-        macro_goals["protein_min"] = 15
-    if profile and any(item.enabled and item.name.lower() == "keto" for item in profile.dietary_notes):
-        macro_goals["carbs_max"] = 10
+    body_weight = profile.weight if profile and profile.weight else None
+    fitness_goal = (profile.fitness_goal or "maintenance").lower() if profile else "maintenance"
+
+    if protein_min is not None:
+        macro_goals["protein_min"] = protein_min
+    elif body_weight:
+        if fitness_goal == "cut":
+            macro_goals["protein_min"] = round(body_weight * 0.30, 1)
+        elif fitness_goal == "bulk":
+            macro_goals["protein_min"] = round(body_weight * 0.25, 1)
+        else:
+            macro_goals["protein_min"] = round(body_weight * 0.22, 1)
+
+    if carbs_min is not None:
+        macro_goals["carbs_min"] = carbs_min
+    elif body_weight and fitness_goal == "bulk":
+        macro_goals["carbs_min"] = round(body_weight * 0.35, 1)
+    elif body_weight and fitness_goal == "maintenance":
+        macro_goals["carbs_min"] = round(body_weight * 0.22, 1)
+
+    if carbs_max is not None:
+        macro_goals["carbs_max"] = carbs_max
+    elif profile and any(item.enabled and item.name.lower() == "keto" for item in profile.dietary_notes):
+        macro_goals["carbs_max"] = 12
+    elif body_weight and fitness_goal == "cut":
+        macro_goals["carbs_max"] = round(body_weight * 0.45, 1)
+
+    if calories_max is not None:
+        macro_goals["calories_max"] = calories_max
+    elif profile and (profile.target_calories or 0) > 0:
+        macro_goals["calories_max"] = max(350, round(profile.target_calories / max(profile.workout_frequency or 3, 3)))
 
     try:
-        foods = semantic_food_search(
-            NutritionQuery(
-                query=user_input,
-                use_full_database=use_full_database,
-                dietary_restrictions=dietary_restrictions,
-                macro_goals=macro_goals,
-                limit=12,
-                similarity_threshold=0.2,
-            )
-        ).results
+        food_candidates = build_meal_candidate_bundle(
+            query=user_input,
+            dietary_restrictions=dietary_restrictions,
+            macro_goals=macro_goals,
+            food_types=food_types or ["foundation"],
+            limit_per_slot=limit_per_slot,
+        )
     except Exception:
-        foods = []
+        fallback_foods = [
+            format_mongo_food_summary(item)
+            for item in find_foods_by_text(
+                query=user_input,
+                limit=max(limit_per_slot * 2, 12),
+                food_types=food_types or ["foundation"],
+                include_ingredients=False,
+            )
+        ]
+        food_candidates = {
+            "query": user_input,
+            "candidate_strategy": {
+                "vector_backend": "faiss",
+                "retrieval_modes": ["text_fallback"],
+                "limit_per_slot": limit_per_slot,
+                "macro_goals": macro_goals,
+                "food_types": food_types or ["foundation"],
+            },
+            "top_matches": fallback_foods[:limit_per_slot],
+            "slot_candidates": {
+                "proteins": [],
+                "carbs": [],
+                "vegetables": [],
+                "fats": [],
+                "flexible": fallback_foods[:limit_per_slot],
+            },
+            "total_candidates": len(fallback_foods[:limit_per_slot]),
+        }
 
-    if not foods:
-        try:
-            foods = [
-                format_mongo_food_summary(item)
-                for item in find_foods_by_text(
-                    query=user_input,
-                    limit=8,
-                    use_full_database=use_full_database,
-                    include_ingredients=True,
-                )
-            ]
-        except Exception:
-            foods = []
-
+    food_candidates.setdefault("candidate_strategy", {})
+    food_candidates["candidate_strategy"]["macro_goals"] = macro_goals
+    food_candidates["candidate_strategy"]["food_types"] = food_types or ["foundation"]
+    top_matches = food_candidates.get("top_matches", [])
+    total_candidates = food_candidates.get("total_candidates", len(top_matches))
     return {
-        "food_candidates": foods,
-        "observation": f"Nutrition search collected {len(foods)} candidate foods.",
+        "food_candidates": food_candidates,
+        "observation": (
+            f"Nutrition search assembled a meal-planning candidate bundle with "
+            f"{total_candidates} foods across grouped slots and {len(top_matches)} direct matches."
+        ),
     }
 
 
@@ -74,7 +123,7 @@ async def generate_meal_plan_artifact(
     user_input: str,
     user_profile: Dict[str, Any],
     meal_preferences: Optional[Dict[str, Any]] = None,
-    food_candidates: Optional[List[Dict[str, Any]]] = None,
+    food_candidates: Optional[Dict[str, Any]] = None,
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model_name: str = "gpt-4o-mini",
 ) -> Dict[str, Any]:
@@ -104,11 +153,14 @@ async def generate_meal_plan_artifact(
                     user_input,
                     profile.model_dump(),
                     meal_request.model_dump(),
-                    food_candidates or [],
+                    food_candidates or {},
                 )
             ),
         ],
     )
+
+    slot_candidates = (food_candidates or {}).get("slot_candidates", {})
+    available_foods_count = sum(len(items) for items in slot_candidates.values())
 
     return {
         "meal_plan": {
@@ -119,7 +171,7 @@ async def generate_meal_plan_artifact(
             "daily_plans": [day.model_dump() for day in meal_plan.days],
             "key_principles": meal_plan.key_principles,
             "shopping_tips": meal_plan.shopping_tips,
-            "available_foods_count": len(food_candidates or []),
+            "available_foods_count": available_foods_count,
             "generated_at": datetime.now().isoformat(),
         },
         "observation": f"Meal plan tool generated a {len(meal_plan.days)}-day plan.",

@@ -5,108 +5,175 @@ import pymongo
 from ..infrastructure.database import get_database
 
 
-def get_food_collection_name(use_full_database: bool) -> str:
-    return "branded_foods" if use_full_database else "branded_foods_sample"
+FOOD_COLLECTION = "foods"
+DEFAULT_FOOD_TYPES = ["foundation"]
+
+MEAL_SLOT_QUERIES: Dict[str, Dict[str, Any]] = {
+    "proteins": {
+        "$or": [
+            {"category": {"$regex": "poultry|beef|pork|lamb|veal|fish|shellfish|egg|legume|soy|bean|lentil|meat", "$options": "i"}},
+            {"per_100g.protein_g": {"$gte": 10}},
+        ],
+        "per_100g.calories_kcal": {"$lte": 360},
+    },
+    "carbs": {
+        "$or": [
+            {"category": {"$regex": "grain|cereal|rice|pasta|bread|fruit|potato|starch|baked", "$options": "i"}},
+            {"per_100g.carbs_g": {"$gte": 12}},
+        ],
+        "per_100g.fat_g": {"$lte": 15},
+    },
+    "vegetables": {
+        "$or": [
+            {"category": {"$regex": "vegetable|fungi|mushroom|herb", "$options": "i"}},
+            {"per_100g.calories_kcal": {"$lte": 80}},
+        ],
+        "per_100g.fat_g": {"$lte": 5},
+        "per_100g.carbs_g": {"$lte": 15},
+    },
+    "fats": {
+        "$or": [
+            {"category": {"$regex": "fat|oil|nut|seed|olive|avocado", "$options": "i"}},
+            {"per_100g.fat_g": {"$gte": 8}},
+        ],
+    },
+}
+
+MEAL_SLOT_SORTS: Dict[str, List[tuple[str, int]]] = {
+    "proteins": [("per_100g.protein_g", pymongo.DESCENDING), ("per_100g.calories_kcal", pymongo.ASCENDING)],
+    "carbs": [("per_100g.carbs_g", pymongo.DESCENDING), ("per_100g.fat_g", pymongo.ASCENDING)],
+    "vegetables": [("per_100g.calories_kcal", pymongo.ASCENDING), ("per_100g.carbs_g", pymongo.ASCENDING)],
+    "fats": [("per_100g.fat_g", pymongo.DESCENDING), ("per_100g.calories_kcal", pymongo.ASCENDING)],
+}
 
 
-def get_food_collection(use_full_database: bool):
-    return get_database()[get_food_collection_name(use_full_database)]
+def get_food_collection_name(food_types: Optional[List[str]] = None) -> str:
+    return FOOD_COLLECTION
+
+
+def get_food_collection():
+    return get_database()[FOOD_COLLECTION]
+
+
+def count_food_documents(food_types: Optional[List[str]] = None) -> int:
+    return int(get_food_collection().count_documents(_base_collection_filter(food_types)))
+
+
+def iterate_food_documents(
+    food_types: Optional[List[str]] = None,
+    max_documents: Optional[int] = None,
+) -> Iterable[Dict[str, Any]]:
+    cursor = get_food_collection().find(_base_collection_filter(food_types))
+    if max_documents is not None:
+        cursor = cursor.limit(max_documents)
+    return cursor
+
+
+def _base_collection_filter(food_types: Optional[List[str]]) -> Dict[str, Any]:
+    return {"type": {"$in": food_types or DEFAULT_FOOD_TYPES}}
+
+
+def _merge_filters(*filters: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_filters = [item for item in filters if item]
+    if not normalized_filters:
+        return {}
+    if len(normalized_filters) == 1:
+        return normalized_filters[0]
+    return {"$and": normalized_filters}
+
+
+def _build_text_match_filters(normalized_query: str) -> List[Dict[str, Any]]:
+    base_fields = [
+        "name",
+        "category",
+        "brand_name",
+        "search_terms",
+        "measurements.modifier",
+        "measurements.unit_name",
+        "measurements.unit_abbreviation",
+    ]
+    filters = [{field: {"$regex": normalized_query, "$options": "i"}} for field in base_fields]
+
+    tokens = [token for token in normalized_query.split() if len(token) >= 3]
+    for token in tokens:
+        filters.extend(
+            {field: {"$regex": token, "$options": "i"}}
+            for field in ["name", "category", "search_terms", "measurements.modifier"]
+        )
+    return filters
 
 
 def find_foods_by_text(
     query: str,
     limit: int,
-    use_full_database: bool,
-    include_ingredients: bool = True,
+    food_types: Optional[List[str]] = None,
+    meal_candidates_only: bool = False,
 ) -> List[Dict[str, Any]]:
-    filters = [
-        {"description": {"$regex": query, "$options": "i"}},
-        {"brandOwner": {"$regex": query, "$options": "i"}},
-    ]
-    if include_ingredients:
-        filters.append({"ingredients": {"$regex": query, "$options": "i"}})
-    return list(get_food_collection(use_full_database).find({"$or": filters}).limit(limit))
+    base_filter = _base_collection_filter(food_types)
+    if meal_candidates_only:
+        base_filter = _merge_filters(base_filter, {"candidate_flags.is_meal_candidate": True})
+    normalized_query = query.strip()
+    if not normalized_query:
+        cursor = get_food_collection().find(base_filter).sort([("name", pymongo.ASCENDING)])
+        return list(cursor.limit(limit))
+
+    mongo_query = _merge_filters(base_filter, {"$or": _build_text_match_filters(normalized_query)})
+    cursor = get_food_collection().find(mongo_query).sort([("name", pymongo.ASCENDING)])
+    return list(cursor.limit(limit))
 
 
 def find_foods_with_macro_filters(
     query: str,
     limit: int,
-    use_full_database: bool,
     protein_min: float,
+    carbs_min: float,
     carbs_max: float,
     calories_max: float,
+    food_types: Optional[List[str]] = None,
+    meal_candidates_only: bool = False,
 ) -> List[Dict[str, Any]]:
-    mongo_query = {
-        "$and": [
-            {
-                "$or": [
-                    {"description": {"$regex": query, "$options": "i"}},
-                    {"brandOwner": {"$regex": query, "$options": "i"}},
-                    {"ingredients": {"$regex": query, "$options": "i"}},
-                ]
-            },
-            {"nutrition_enhanced.per_100g.protein_g": {"$gte": protein_min}},
-            {"nutrition_enhanced.per_100g.carbs_g": {"$lte": carbs_max}},
-            {"nutrition_enhanced.per_100g.energy_kcal": {"$lte": calories_max}},
-        ]
-    }
-    return list(get_food_collection(use_full_database).find(mongo_query).limit(limit))
-
-
-def count_food_documents(use_full_database: bool) -> int:
-    return get_food_collection(use_full_database).count_documents({})
-
-
-def iterate_food_documents(use_full_database: bool, max_documents: Optional[int] = None) -> Iterable[Dict[str, Any]]:
-    cursor = get_food_collection(use_full_database).find({})
-    if max_documents:
-        cursor = cursor.limit(max_documents)
-    return cursor
-
-
-def create_sample_food_indexes() -> None:
-    branded_foods = get_food_collection(False)
-    branded_foods.create_index([("foodClass", pymongo.ASCENDING)])
-    branded_foods.create_index([("brandOwner", pymongo.ASCENDING)])
-    branded_foods.create_index([("foodCategory", pymongo.ASCENDING)])
-    branded_foods.create_index([("gtinUpc", pymongo.ASCENDING)])
-    branded_foods.create_index(
-        [("description", pymongo.TEXT), ("ingredients", pymongo.TEXT)],
-        name="search_text_index",
+    text_match = find_foods_by_text(
+        query=query,
+        limit=max(limit * 4, 50),
+        food_types=food_types,
+        meal_candidates_only=meal_candidates_only,
     )
-    branded_foods.create_index(
-        [("nutrition_enhanced.macro_breakdown.primary_macro_category", pymongo.ASCENDING)]
+    candidate_ids = [item["_id"] for item in text_match]
+    if not candidate_ids:
+        return []
+
+    filters: List[Dict[str, Any]] = [
+        _base_collection_filter(food_types),
+        {"_id": {"$in": candidate_ids}},
+    ]
+    if meal_candidates_only:
+        filters.append({"candidate_flags.is_meal_candidate": True})
+    if protein_min > 0:
+        filters.append({"per_100g.protein_g": {"$gte": protein_min}})
+    if carbs_min > 0:
+        filters.append({"per_100g.carbs_g": {"$gte": carbs_min}})
+    if carbs_max < 999:
+        filters.append({"per_100g.carbs_g": {"$lte": carbs_max}})
+    if calories_max < 999:
+        filters.append({"per_100g.calories_kcal": {"$lte": calories_max}})
+
+    cursor = get_food_collection().find(_merge_filters(*filters)).sort(
+        [("per_100g.protein_g", pymongo.DESCENDING), ("per_100g.calories_kcal", pymongo.ASCENDING)]
     )
-    branded_foods.create_index(
-        [("nutrition_enhanced.macro_breakdown.is_high_protein", pymongo.ASCENDING)]
-    )
-    branded_foods.create_index([("nutrition_enhanced.macro_breakdown.is_high_fat", pymongo.ASCENDING)])
-    branded_foods.create_index([("nutrition_enhanced.macro_breakdown.is_high_carb", pymongo.ASCENDING)])
-    branded_foods.create_index([("nutrition_enhanced.macro_breakdown.is_balanced", pymongo.ASCENDING)])
-    branded_foods.create_index([("nutrition_enhanced.per_100g.protein_g", pymongo.DESCENDING)])
-    branded_foods.create_index([("nutrition_enhanced.per_100g.energy_kcal", pymongo.ASCENDING)])
-    branded_foods.create_index([("nutrition_enhanced.nutrition_density_score", pymongo.DESCENDING)])
-    branded_foods.create_index([("nutrition_enhanced.macro_breakdown.protein_percent", pymongo.DESCENDING)])
+    return list(cursor.limit(limit))
 
 
-def insert_sample_food_batch(batch: List[Dict[str, Any]]) -> int:
-    get_food_collection(False).insert_many(batch, ordered=False)
-    return len(batch)
-
-
-def count_enhanced_sample_foods() -> int:
-    return get_food_collection(False).count_documents({"nutrition_enhanced": {"$exists": True}})
-
-
-def list_collection_names() -> List[str]:
-    return get_database().list_collection_names()
-
-
-def get_collection_stats(collection_name: str) -> Dict[str, Any]:
-    collection = get_database()[collection_name]
-    sample = collection.find_one()
-    return {
-        "document_count": collection.count_documents({}),
-        "sample_fields": list(sample.keys())[:10] if sample else [],
-        "total_fields": len(sample.keys()) if sample else 0,
-    }
+def find_foods_for_meal_slot(
+    slot_name: str,
+    limit: int,
+    food_types: Optional[List[str]] = None,
+    meal_candidates_only: bool = True,
+) -> List[Dict[str, Any]]:
+    slot_query = MEAL_SLOT_QUERIES.get(slot_name, {})
+    base_filter = _base_collection_filter(food_types)
+    if meal_candidates_only:
+        base_filter = _merge_filters(base_filter, {"candidate_flags.is_meal_candidate": True})
+    mongo_query = _merge_filters(base_filter, slot_query)
+    sort_spec = MEAL_SLOT_SORTS.get(slot_name, [("name", pymongo.ASCENDING)])
+    cursor = get_food_collection().find(mongo_query).sort(sort_spec)
+    return list(cursor.limit(limit))

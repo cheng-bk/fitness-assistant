@@ -11,4 +11,4 @@ __pycache__/
 venv/
 env/
 
-data/json
+data/raw

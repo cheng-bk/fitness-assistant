@@ -1,3 +1,4 @@
+import json
 from typing import Any, Dict, List
 
 from langchain_core.tools import BaseTool
@@ -151,6 +152,8 @@ PLANNER_SYSTEM_PROMPT = (
     "if the current path is inefficient because of missing prerequisites, weak information, or previous tool failure, adjust strategy instead of repeating the same step blindly; "
     "when the user is mainly asking for explanation, advice, or summary, minimize unnecessary tool usage; "
     "when the user explicitly wants a detailed meal plan or workout plan, choose the corresponding planning tool; "
+    "for food search, use tool_input to set practical search parameters when helpful, such as protein_min, carbs_min, carbs_max, calories_max, or limit_per_slot; "
+    "protein_min is often useful across fitness goals, carbs_min is especially useful for bulking, carbs_max is often useful for cutting or keto-like requests, and fats are usually handled by the fixed fats slot rather than strict fat constraints; "
     "if no more tool work is needed, return next_step as null. "
     "Focus on what the best next step is now, not on every theoretical thing the system could do."
 )
@@ -262,31 +265,60 @@ def build_decision_user_prompt(
 
 MEAL_PLAN_SYSTEM_PROMPT = (
     "You are the meal planning tool agent. "
-    "Your task is to generate a structured meal plan using the user profile, calorie and macro targets, meal preferences, and candidate foods when available. "
+    "Your task is to generate a structured meal plan using the user profile, calorie and macro targets, meal preferences, and grouped candidate foods when available. "
     "Follow these principles: the plan must be practical and executable; "
     "align it with the user's goal such as muscle gain, fat loss, or maintenance; "
-    "use the provided candidate foods when reasonable, but do not force them if they reduce plan quality; "
+    "treat grouped candidate foods as the primary ingredient pool; "
+    "prefer proteins for main meals, vegetables for volume and micronutrient coverage, carbs for energy support, and fats in smaller amounts; "
+    "foundation foods are generic ingredients, so choose realistic portions in grams or common household amounts; "
+    "when measurements or portion hints are available in candidate foods, use them to make portions more natural and actionable; "
+    "reuse candidate foods intelligently instead of forcing too much variety; "
     "keep meals, portions, calories, and macros realistic; "
+    "daily totals should stay close to target macros without requiring perfect mathematical precision; "
+    "if explicit target calories or target macros are available in the user profile, follow them first; "
+    "if exact targets are missing, use practical heuristic ranges rather than guessing randomly; "
+    "for bulking or muscle gain, protein is usually prioritized around 1.6-2.2 g per kg body weight per day and carbs are usually relatively generous, often around 3-6 g per kg depending on training demand; "
+    "for cutting or fat loss, keep protein high, often around 1.8-2.4 g per kg body weight per day for muscle preservation, or 1.2-1.8 g per kg for fat loss, while using carbs more selectively to preserve training quality within a calorie deficit; "
+    "for maintenance, keep protein at least around 1.6-2.0 g per kg body weight per day and keep carbs moderate and sustainable; "
+    "do not over-emphasize added fats; use high-fat foods mainly in smaller amounts for cooking, flavor, or targeted calorie support; "
     "shopping tips and notes should be useful in real life; "
     "the output should be suitable for conversion into a structured artifact rather than long free-form prose."
 )
 MEAL_PLAN_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
 
 
+def _format_meal_candidates(food_candidates: Dict[str, Any]) -> str:
+    if not food_candidates:
+        return "None"
+
+    payload = {
+        "candidate_strategy": food_candidates.get("candidate_strategy", {}),
+        "top_matches": food_candidates.get("top_matches", [])[:6],
+        "slot_candidates": {
+            slot_name: items[:5]
+            for slot_name, items in food_candidates.get("slot_candidates", {}).items()
+        },
+        "total_candidates": food_candidates.get("total_candidates", 0),
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
 def build_meal_plan_user_prompt(
     user_input: str,
     profile: Dict[str, Any],
     meal_request: Dict[str, Any],
-    food_candidates: List[Dict[str, Any]],
+    food_candidates: Dict[str, Any],
 ) -> str:
     return (
         f"User input: {user_input}\n"
         f"User profile: {profile}\n"
         f"Meal plan request parameters: {meal_request}\n"
-        f"Candidate foods: {food_candidates[:10]}\n"
+        f"Grouped candidate foods: {_format_meal_candidates(food_candidates)}\n"
         "Generate a practical structured meal plan. "
-        "It should respect calorie, protein, carbohydrate, and fat targets, and use candidate foods when appropriate. "
-        "The plan should be nutritionally sound and easy to follow in daily life."
+        "It should respect calorie, protein, carbohydrate, and fat targets, and use the grouped candidates as the main ingredient pool. "
+        "When candidate foods include measurement hints, prefer those hints for practical portion descriptions. "
+        "Each main meal should normally include a protein source and at least one plant food. "
+        "Keep ingredient choices simple enough for an everyday user to buy and cook."
     )
 
 

@@ -43,7 +43,7 @@ class UserProfile(BaseModel):
 class FitnessRequest(BaseModel):
     user_input: str
     user_profile: Optional[UserProfile] = None
-    use_full_database: bool = False
+    food_types: List[str] = Field(default_factory=lambda: ["foundation"])
     max_iterations: int = Field(default=6, ge=2, le=12)
 
 
@@ -145,15 +145,20 @@ class ActionRecord(BaseModel):
 
 class SearchFoodCandidatesInput(BaseModel):
     user_input: str
-    use_full_database: bool = False
+    food_types: List[str] = Field(default_factory=lambda: ["foundation"])
     user_profile: Optional[Dict[str, Any]] = None
+    protein_min: Optional[float] = None
+    carbs_min: Optional[float] = None
+    carbs_max: Optional[float] = None
+    calories_max: Optional[float] = None
+    limit_per_slot: int = 6
 
 
 class MealPlanInput(BaseModel):
     user_input: str
     user_profile: Dict[str, Any]
     meal_preferences: Dict[str, Any] = Field(default_factory=dict)
-    food_candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    food_candidates: Dict[str, Any] = Field(default_factory=dict)
     base_url: str
     model_name: str
 
@@ -261,7 +266,7 @@ class NutritionQuery(BaseModel):
     macro_goals: Dict[str, float] = Field(default_factory=dict)
     limit: int = 10
     similarity_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
-    use_full_database: bool = False
+    food_types: List[str] = Field(default_factory=lambda: ["foundation"])
 
 
 class VectorSearchResponse(BaseModel):
@@ -278,3 +283,22 @@ class HybridSearchResponse(BaseModel):
     traditional_weight: float
     results_found: int
     results: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class IndexStatus(BaseModel):
+    exists: bool
+    loaded: bool
+    loading: bool
+    file_size_mb: Optional[float] = None
+    last_modified: Optional[str] = None
+    error: Optional[str] = None
+    index_size: Optional[int] = None
+    embedding_dimension: Optional[int] = None
+    memory_usage_mb: Optional[float] = None
+
+
+class VectorIndexStatusResponse(BaseModel):
+    system_info: Dict[str, Any]
+    full_database: IndexStatus
+    sample_database: IndexStatus
+    legacy_index: IndexStatus

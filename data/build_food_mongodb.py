@@ -101,9 +101,24 @@ def extract_carbs_g(food_nutrients: List[Dict[str, Any]]) -> Optional[float]:
     return extract_nutrient_amount(food_nutrients, "carbs_g_summation")
 
 
+def extract_measurements(food: Dict[str, Any]) -> List[Dict[str, Any]]:
+    measurements = food.get("foodPortions", [])
+    res = []
+    for measurement in measurements:
+        res.append({
+            "value": measurement.get("value"),
+            "unit_name": measurement.get("measureUnit").get("name"),
+            "unit_abbreviation": measurement.get("measureUnit").get("abbreviation"),
+            "modifier": measurement.get("modifier"),
+            "gram_weight": measurement.get("gramWeight")
+        })
+    return res
+
+
 def build_meal_planner_document(food: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     fdc_id = food.get("fdcId")
     name = food.get("description")
+    category = food.get("foodCategory").get("description") if food.get("foodCategory") else None
     nutrients = food.get("foodNutrients", [])
 
     if not fdc_id or not name or not isinstance(nutrients, list):
@@ -113,12 +128,14 @@ def build_meal_planner_document(food: Dict[str, Any]) -> Optional[Dict[str, Any]
         "_id": f"fcid:{fdc_id}",
         "type": "foundation",
         "name": name,
+        "category": category,
         "per_100g": {
             "calories_kcal": extract_energy_kcal(nutrients),
             "protein_g": extract_nutrient_amount(nutrients, "protein_g"),
             "fat_g": extract_nutrient_amount(nutrients, "fat_g"),
             "carbs_g": extract_carbs_g(nutrients),
         },
+        "measurements": extract_measurements(food)
     }
 
     return document
@@ -141,10 +158,11 @@ def iter_compact_documents(foods: Iterable[Dict[str, Any]], limit: Optional[int]
 def create_indexes(collection) -> None:
     collection.create_index("type")
     collection.create_index([("type", 1), ("name", 1)])
+    collection.create_index([("type", 1), ("category", 1)])
     collection.create_index([("type", 1), ("per_100g.calories_kcal", 1)])
-    collection.create_index([("type", 1), ("per_100g.protein_g", -1)])
-    collection.create_index([("type", 1), ("per_100g.fat_g", 1)])
     collection.create_index([("type", 1), ("per_100g.carbs_g", 1)])
+    collection.create_index([("type", 1), ("per_100g.protein_g", -1)])
+    collection.create_index([("type", 1), ("per_100g.fat_g", -1)])
 
 
 def write_documents(collection, documents: Iterable[Dict[str, Any]], batch_size: int) -> int:

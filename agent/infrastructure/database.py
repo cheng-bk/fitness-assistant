@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
@@ -21,7 +21,7 @@ def get_mongo_client() -> MongoClient:
     mongo_host = os.getenv("MONGO_HOST", "localhost")
     mongo_port = os.getenv("MONGO_PORT", "27017")
     mongo_auth_source = os.getenv("MONGO_AUTH_SOURCE", "admin")
-    
+
     uri = f"mongodb://{mongo_user}:{mongo_password}@{mongo_host}:{mongo_port}/?authSource={mongo_auth_source}"
 
     try:
@@ -31,7 +31,6 @@ def get_mongo_client() -> MongoClient:
         return client
     except Exception as exc:
         raise RuntimeError(f"Failed to connect to MongoDB: {exc}") from exc
-    
 
 
 def get_database():
@@ -49,14 +48,21 @@ def get_embeddings_model() -> OpenAIEmbeddings:
     return _embeddings_model
 
 
-def get_vector_store(use_full_database: bool = False):
-    key = "full" if use_full_database else "sample"
+def _vector_store_key(food_types: Optional[list[str]] = None) -> str:
+    normalized = sorted({item.strip() for item in (food_types or ["foundation"]) if item and item.strip()})
+    return "|".join(normalized) if normalized else "foundation"
+
+
+def get_vector_store(food_types: Optional[list[str]] = None):
+    key = _vector_store_key(food_types)
     if key in _vector_stores:
         return _vector_stores[key]
 
-    index_path = "./nutrition_faiss_index_full" if use_full_database else "./nutrition_faiss_index_sample"
-    if not os.path.exists(index_path) and not use_full_database:
-        index_path = "./nutrition_faiss_index"
+    index_path = get_index_path(food_types=food_types)
+    if not os.path.exists(index_path) and key == "foundation":
+        legacy_path = "./nutrition_faiss_index"
+        if os.path.exists(legacy_path):
+            index_path = legacy_path
 
     if not os.path.exists(index_path):
         return None
@@ -70,10 +76,14 @@ def get_vector_store(use_full_database: bool = False):
     return vector_store
 
 
-def set_vector_store(use_full_database: bool, vector_store: Any) -> None:
-    key = "full" if use_full_database else "sample"
+def set_vector_store(food_types: Optional[list[str]], vector_store: Any) -> None:
+    key = _vector_store_key(food_types)
+    if vector_store is None and key in _vector_stores:
+        del _vector_stores[key]
+        return
     _vector_stores[key] = vector_store
 
 
-def get_index_path(use_full_database: bool = False) -> str:
-    return "./nutrition_faiss_index_full" if use_full_database else "./nutrition_faiss_index_sample"
+def get_index_path(food_types: Optional[list[str]] = None) -> str:
+    key = _vector_store_key(food_types).replace("|", "_")
+    return f"./nutrition_faiss_index_{key}"

@@ -15,13 +15,23 @@ from .services.tool_service import (
 
 async def search_food_candidates_tool(
     user_input: str,
-    use_full_database: bool = False,
+    food_types: Optional[List[str]] = None,
     user_profile: Optional[Dict[str, Any]] = None,
+    protein_min: Optional[float] = None,
+    carbs_min: Optional[float] = None,
+    carbs_max: Optional[float] = None,
+    calories_max: Optional[float] = None,
+    limit_per_slot: int = 6,
 ) -> Dict[str, Any]:
     return await search_food_candidates_artifact(
         user_input=user_input,
-        use_full_database=use_full_database,
+        food_types=food_types,
         user_profile=user_profile,
+        protein_min=protein_min,
+        carbs_min=carbs_min,
+        carbs_max=carbs_max,
+        calories_max=calories_max,
+        limit_per_slot=limit_per_slot,
     )
 
 
@@ -29,7 +39,7 @@ async def generate_meal_plan_tool(
     user_input: str,
     user_profile: Dict[str, Any],
     meal_preferences: Optional[Dict[str, Any]] = None,
-    food_candidates: Optional[List[Dict[str, Any]]] = None,
+    food_candidates: Optional[Dict[str, Any]] = None,
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model_name: str = "gpt-4o-mini",
 ) -> Dict[str, Any]:
@@ -67,7 +77,7 @@ def build_tool_registry(
             name="search_food_candidates",
             description=(
                 "Search for candidate foods. "
-                "Use this tool to collect food candidates from semantic search or text search based on the user request and current profile. "
+                "Use this tool to collect grouped meal-planning candidates from FAISS semantic retrieval, text search, and slot-based food pools. "
                 "It is useful when the user asks what to eat, wants a meal plan, or needs food options filtered by dietary or macro constraints."
             ),
             args_schema=SearchFoodCandidatesInput,
@@ -78,7 +88,7 @@ def build_tool_registry(
             description=(
                 "Generate a structured meal plan. "
                 "Use this tool when the user explicitly wants a diet plan, eating schedule, fat loss meal plan, or muscle gain meal plan. "
-                "A valid user profile should normally exist first, and candidate foods are helpful when you want the plan to reflect realistic food options."
+                "A valid user profile should normally exist first, and grouped candidate foods help keep the plan realistic, balanced."
             ),
             args_schema=MealPlanInput,
         ),

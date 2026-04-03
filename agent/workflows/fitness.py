@@ -175,30 +175,38 @@ class FitnessGraph:
         request = state["request"]
         artifacts = state["artifacts"]
         profile = request.user_profile
+        step = state.get("active_step") or {}
+        step_input = dict(step.get("tool_input") or {})
 
         if tool_name == "search_food_candidates":
-            return {
+            payload = {
                 "user_input": request.user_input,
-                "use_full_database": request.use_full_database,
+                "food_types": request.food_types,
                 "user_profile": artifacts.get("user_profile") or (profile.model_dump() if profile else None),
             }
+            payload.update(step_input)
+            return payload
         if tool_name == "generate_meal_plan":
-            return {
+            payload = {
                 "user_input": request.user_input,
                 "user_profile": artifacts["user_profile"],
                 "meal_preferences": {},
-                "food_candidates": artifacts.get("food_candidates", []),
+                "food_candidates": artifacts.get("food_candidates", {}),
                 "base_url": self.base_url,
                 "model_name": self.model_name,
             }
+            payload.update(step_input)
+            return payload
         if tool_name == "generate_workout_plan":
-            return {
+            payload = {
                 "user_input": request.user_input,
                 "user_profile": artifacts["user_profile"],
                 "workout_preferences": {},
                 "base_url": self.base_url,
                 "model_name": self.model_name,
             }
+            payload.update(step_input)
+            return payload
         raise ValueError(f"Unknown tool: {tool_name}")
 
     def _set_active_step_status(self, state: FitnessState, status: str) -> None:

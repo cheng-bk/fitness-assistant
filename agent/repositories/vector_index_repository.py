@@ -1,6 +1,7 @@
 import os
+import shutil
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from ..infrastructure.database import (
     get_embeddings_model,
@@ -10,29 +11,38 @@ from ..infrastructure.database import (
 )
 
 
-def get_index_directory(use_full_database: bool) -> str:
-    return get_index_path(use_full_database=use_full_database)
+def get_index_directory(food_types: Optional[list[str]] = None) -> str:
+    return get_index_path(food_types=food_types)
 
 
 def index_exists(path: str) -> bool:
     return os.path.exists(path)
 
 
-def load_vector_store(use_full_database: bool):
-    return get_vector_store(use_full_database=use_full_database)
+def load_vector_store(food_types: Optional[list[str]] = None):
+    return get_vector_store(food_types=food_types)
 
 
 def get_embeddings():
     return get_embeddings_model()
 
 
-def cache_vector_store(use_full_database: bool, vector_store: Any) -> None:
-    set_vector_store(use_full_database=use_full_database, vector_store=vector_store)
+def cache_vector_store(food_types: Optional[list[str]], vector_store: Any) -> None:
+    set_vector_store(food_types=food_types, vector_store=vector_store)
 
 
 def save_vector_store(vector_store: Any, path: str) -> None:
     os.makedirs(path, exist_ok=True)
     vector_store.save_local(path)
+
+
+def drop_vector_store(food_types: Optional[list[str]] = None) -> None:
+    path = get_index_directory(food_types)
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+    elif os.path.exists(path):
+        os.remove(path)
+    set_vector_store(food_types, None)
 
 
 def check_file_info(path: str) -> Dict[str, Any]:

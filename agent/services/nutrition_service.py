@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import psutil
 from fastapi import HTTPException
@@ -16,6 +16,7 @@ from ..models import (
 from ..repositories.food_repository import (
     count_food_documents,
     find_foods_by_text,
+    find_foods_for_meal_slot,
     find_foods_with_macro_filters,
     get_food_collection_name,
     iterate_food_documents,
@@ -23,6 +24,7 @@ from ..repositories.food_repository import (
 from ..repositories.vector_index_repository import (
     cache_vector_store,
     check_file_info,
+    drop_vector_store,
     get_embeddings,
     get_index_directory,
     index_exists,
@@ -31,37 +33,199 @@ from ..repositories.vector_index_repository import (
 )
 
 
+VEGETABLE_KEYWORDS = {
+    "broccoli",
+    "spinach",
+    "lettuce",
+    "cabbage",
+    "cauliflower",
+    "zucchini",
+    "eggplant",
+    "asparagus",
+    "pepper",
+    "tomato",
+    "carrot",
+    "cucumber",
+    "onion",
+    "mushroom",
+    "kale",
+    "celery",
+}
+
+CATEGORY_ROLE_HINTS = {
+    "vegetables": [
+        "vegetable",
+        "vegetables",
+        "mushroom",
+        "fungi",
+        "herb",
+        "seaweed",
+    ],
+    "proteins": [
+        "poultry",
+        "beef",
+        "pork",
+        "lamb",
+        "veal",
+        "game",
+        "fish",
+        "shellfish",
+        "egg",
+        "sausage",
+        "meat",
+        "legume",
+        "bean",
+        "lentil",
+        "soy",
+    ],
+    "carbs": [
+        "grain",
+        "cereal",
+        "rice",
+        "pasta",
+        "bread",
+        "baked",
+        "fruit",
+        "potato",
+        "starch",
+    ],
+    "fats": [
+        "fat",
+        "oil",
+        "nut",
+        "seed",
+        "olive",
+        "avocado",
+    ],
+}
+
+
+def _get_per_100g(food_item: Dict[str, Any]) -> Dict[str, float]:
+    per_100g = food_item.get("per_100g", {})
+    return {
+        "calories_kcal": float(per_100g.get("calories_kcal", 0) or 0),
+        "protein_g": float(per_100g.get("protein_g", 0) or 0),
+        "fat_g": float(per_100g.get("fat_g", 0) or 0),
+        "carbs_g": float(per_100g.get("carbs_g", 0) or 0),
+    }
+
+
+def _get_category(food_item: Dict[str, Any]) -> str:
+    return str(food_item.get("category") or "").strip()
+
+
+def _format_measurements(food_item: Dict[str, Any], limit: int = 3) -> List[str]:
+    formatted: List[str] = []
+    seen = set()
+    for measurement in food_item.get("measurements", []) or []:
+        if not isinstance(measurement, dict):
+            continue
+        value = measurement.get("value")
+        unit_name = measurement.get("unit_name")
+        modifier = measurement.get("modifier")
+        gram_weight = measurement.get("gram_weight")
+        parts: List[str] = []
+        if value:
+            parts.append(str(value))
+        if unit_name:
+            parts.append(str(unit_name))
+        if modifier:
+            parts.append(str(modifier))
+        label = " ".join(parts).strip()
+        if gram_weight:
+            label = f"{label} ({round(float(gram_weight), 1)}g)".strip()
+        if not label:
+            continue
+        normalized_label = label.lower()
+        if normalized_label in seen:
+            continue
+        seen.add(normalized_label)
+        formatted.append(label)
+        if len(formatted) >= limit:
+            break
+    return formatted
+
+
+def _category_matches(category: str, role: str) -> bool:
+    category_lower = category.lower()
+    return any(keyword in category_lower for keyword in CATEGORY_ROLE_HINTS.get(role, []))
+
+
+def infer_meal_role(food_item: Dict[str, Any]) -> str:
+    name = str(food_item.get("name", "")).lower()
+    category = _get_category(food_item)
+    per_100g = _get_per_100g(food_item)
+    protein = per_100g["protein_g"]
+    fat = per_100g["fat_g"]
+    carbs = per_100g["carbs_g"]
+    calories = per_100g["calories_kcal"]
+
+    if category:
+        if _category_matches(category, "vegetables") and calories <= 90:
+            return "vegetables"
+        if _category_matches(category, "fats") and fat >= 8:
+            return "fats"
+        if _category_matches(category, "proteins") and protein >= 8:
+            return "proteins"
+        if _category_matches(category, "carbs") and carbs >= 10:
+            return "carbs"
+    if any(keyword in name for keyword in VEGETABLE_KEYWORDS) and calories <= 90:
+        return "vegetables"
+    if protein >= 10 and protein >= carbs and protein * 0.9 >= fat:
+        return "proteins"
+    if fat >= 8 and fat >= protein and fat >= carbs:
+        return "fats"
+    if carbs >= 12 and carbs >= protein and carbs >= fat:
+        return "carbs"
+    if calories <= 80 and fat <= 5:
+        return "vegetables"
+    return "flexible"
+
+
+def normalize_food_document(food_item: Dict[str, Any], similarity_score: float = 0.0) -> Dict[str, Any]:
+    per_100g = _get_per_100g(food_item)
+    role = infer_meal_role(food_item)
+    category = _get_category(food_item)
+    measurements = _format_measurements(food_item)
+    return {
+        "id": food_item.get("_id"),
+        "fdc_id": food_item.get("fdc_id"),
+        "name": food_item.get("name"),
+        "type": food_item.get("type", "foundation"),
+        "category": category or None,
+        "brand_name": food_item.get("brand_name"),
+        "meal_role": role,
+        "measurements": measurements,
+        "similarity_score": round(float(similarity_score), 4),
+        "per_100g": {
+            "calories_kcal": round(per_100g["calories_kcal"], 2),
+            "protein_g": round(per_100g["protein_g"], 2),
+            "fat_g": round(per_100g["fat_g"], 2),
+            "carbs_g": round(per_100g["carbs_g"], 2),
+        },
+    }
+
+
 def create_food_text_representation(food_item: Dict[str, Any]) -> str:
-    parts: List[str] = []
-    if food_item.get("description"):
-        parts.append(f"Food: {food_item['description']}")
-    if food_item.get("brandOwner"):
-        parts.append(f"Brand: {food_item['brandOwner']}")
-    if food_item.get("brandName"):
-        parts.append(f"Product: {food_item['brandName']}")
-    if food_item.get("foodCategory"):
-        parts.append(f"Category: {food_item['foodCategory']}")
-    if food_item.get("ingredients"):
-        parts.append(f"Ingredients: {food_item['ingredients'][:500]}")
-
-    nutrition = food_item.get("nutrition_enhanced", {})
-    per_100g = nutrition.get("per_100g", {})
-    if per_100g:
-        parts.append(
-            f"Per 100g: {per_100g.get('energy_kcal', 0)} calories, "
+    normalized = normalize_food_document(food_item)
+    per_100g = normalized["per_100g"]
+    parts = [
+        f"Food: {normalized.get('name', '')}",
+        f"Type: {normalized.get('type', 'foundation')}",
+        f"Meal role: {normalized.get('meal_role', 'flexible')}",
+        (
+            f"Per 100g: {per_100g.get('calories_kcal', 0)} kcal, "
             f"{per_100g.get('protein_g', 0)}g protein, "
-            f"{per_100g.get('total_fat_g', 0)}g fat, "
+            f"{per_100g.get('fat_g', 0)}g fat, "
             f"{per_100g.get('carbs_g', 0)}g carbs"
-        )
-
-    primary_macro = nutrition.get("macro_breakdown", {}).get("primary_macro_category")
-    if primary_macro and primary_macro != "unknown":
-        parts.append(f"Primary macro: {primary_macro}")
-
-    if food_item.get("servingSize") and food_item.get("servingSizeUnit"):
-        parts.append(f"Serving: {food_item['servingSize']}{food_item['servingSizeUnit']}")
-    if food_item.get("householdServingFullText"):
-        parts.append(f"Serving description: {food_item['householdServingFullText']}")
+        ),
+    ]
+    if normalized.get("category"):
+        parts.append(f"Category: {normalized['category']}")
+    if normalized.get("measurements"):
+        parts.append(f"Common measures: {', '.join(normalized['measurements'])}")
+    if normalized.get("brand_name"):
+        parts.append(f"Brand: {normalized['brand_name']}")
     return " | ".join(parts)
 
 
@@ -82,23 +246,14 @@ def _matches_dietary_restrictions(content_lower: str, restrictions: List[str]) -
 
 def _matches_macro_goals(metadata: Dict[str, Any], macro_goals: Dict[str, float]) -> bool:
     protein = metadata.get("protein_per_100g", 0)
-    fat = metadata.get("fat_per_100g", 0)
     carbs = metadata.get("carbs_per_100g", 0)
     calories = metadata.get("calories_per_100g", 0)
     for goal, value in macro_goals.items():
         if goal == "protein_min" and protein < value:
             return False
-        if goal == "protein_max" and protein > value:
-            return False
-        if goal == "fat_min" and fat < value:
-            return False
-        if goal == "fat_max" and fat > value:
-            return False
         if goal == "carbs_min" and carbs < value:
             return False
         if goal == "carbs_max" and carbs > value:
-            return False
-        if goal == "calories_min" and calories < value:
             return False
         if goal == "calories_max" and calories > value:
             return False
@@ -108,66 +263,52 @@ def _matches_macro_goals(metadata: Dict[str, Any], macro_goals: Dict[str, float]
 def _format_semantic_result(doc: Document, normalized_score: float) -> Dict[str, Any]:
     metadata = doc.metadata
     return {
+        "id": metadata.get("id"),
         "fdc_id": metadata.get("fdc_id"),
-        "description": metadata.get("description"),
-        "brand_owner": metadata.get("brand_owner"),
-        "brand_name": metadata.get("brand_name"),
-        "food_category": metadata.get("food_category"),
+        "name": metadata.get("name"),
+        "type": metadata.get("type", "foundation"),
+        "category": metadata.get("category"),
+        "meal_role": metadata.get("meal_role", "flexible"),
+        "measurements": metadata.get("measurements", []),
         "similarity_score": normalized_score,
-        "nutrition_per_100g": {
-            "calories": metadata.get("calories_per_100g", 0),
+        "per_100g": {
+            "calories_kcal": metadata.get("calories_per_100g", 0),
             "protein_g": metadata.get("protein_per_100g", 0),
             "fat_g": metadata.get("fat_per_100g", 0),
             "carbs_g": metadata.get("carbs_per_100g", 0),
         },
-        "primary_macro_category": metadata.get("primary_macro", "unknown"),
-        "is_high_protein": metadata.get("is_high_protein", False),
-        "nutrition_density_score": metadata.get("nutrition_density_score", 0),
-        "serving_size": metadata.get("serving_size", 0),
-        "matched_content": doc.page_content[:200] + ("..." if len(doc.page_content) > 200 else ""),
+        "matched_content": doc.page_content[:220] + ("..." if len(doc.page_content) > 220 else ""),
     }
 
 
 def format_mongo_food_summary(food_item: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "fdc_id": food_item.get("fdcId"),
-        "description": food_item.get("description"),
-        "brand_owner": food_item.get("brandOwner"),
-        "brand_name": food_item.get("brandName"),
-        "food_category": food_item.get("foodCategory"),
-        "similarity_score": 0.0,
-        "nutrition_per_100g": food_item.get("nutrition_enhanced", {}).get("per_100g", {}),
-    }
+    return normalize_food_document(food_item, similarity_score=0.0)
 
 
 def format_mongo_food_detail(food_item: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "fdc_id": food_item.get("fdcId"),
-        "description": food_item.get("description"),
-        "brand_owner": food_item.get("brandOwner"),
-        "brand_name": food_item.get("brandName"),
-        "food_class": food_item.get("foodClass"),
-        "food_category": food_item.get("foodCategory"),
-        "gtin_upc": food_item.get("gtinUpc"),
-        "ingredients": food_item.get("ingredients"),
-        "serving_size": food_item.get("servingSize"),
-        "serving_size_unit": food_item.get("servingSizeUnit"),
-        "household_serving_fulltext": food_item.get("householdServingFullText"),
-        "nutrition_enhanced": food_item.get("nutrition_enhanced", {}),
-    }
+    normalized = normalize_food_document(food_item, similarity_score=0.0)
+    normalized["source_document"] = food_item
+    return normalized
+
+
+def _safe_similarity_search(query_data: NutritionQuery) -> List[Dict[str, Any]]:
+    try:
+        return semantic_food_search(query_data).results
+    except Exception:
+        return []
 
 
 def semantic_food_search(query_data: NutritionQuery) -> VectorSearchResponse:
     start_time = datetime.now()
-    vector_store = load_vector_store(use_full_database=query_data.use_full_database)
+    vector_store = load_vector_store(food_types=query_data.food_types)
     if vector_store is None:
-        db_type = "full" if query_data.use_full_database else "sample"
+        db_type = ",".join(query_data.food_types or ["foundation"])
         raise HTTPException(
             status_code=404,
-            detail=f"Vector index for {db_type} database not found. Please create it first.",
+            detail=f"FAISS vector index for {db_type} foods not found. Please create it first.",
         )
 
-    docs_and_scores = vector_store.similarity_search_with_score(query_data.query, k=query_data.limit * 2)
+    docs_and_scores = vector_store.similarity_search_with_score(query_data.query, k=query_data.limit * 3)
     results: List[Dict[str, Any]] = []
     for doc, raw_score in docs_and_scores:
         normalized_score = max(0.0, 1.0 / (1.0 + float(raw_score)))
@@ -192,98 +333,199 @@ def semantic_food_search(query_data: NutritionQuery) -> VectorSearchResponse:
     )
 
 
+def _dedupe_candidates(candidates: Iterable[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen_ids = set()
+    for candidate in candidates:
+        candidate_id = candidate.get("id") or candidate.get("fdc_id") or candidate.get("name")
+        if candidate_id in seen_ids:
+            continue
+        seen_ids.add(candidate_id)
+        deduped.append(candidate)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def build_meal_candidate_bundle(
+    query: str,
+    dietary_restrictions: List[str],
+    macro_goals: Dict[str, float],
+    food_types: Optional[List[str]] = None,
+    limit_per_slot: int = 6,
+) -> Dict[str, Any]:
+    normalized_food_types = food_types or ["foundation"]
+    semantic_hits = _safe_similarity_search(
+        NutritionQuery(
+            query=query,
+            dietary_restrictions=dietary_restrictions,
+            macro_goals=macro_goals,
+            limit=limit_per_slot * 3,
+            similarity_threshold=0.15,
+            food_types=normalized_food_types,
+        )
+    )
+    text_hits = [
+        format_mongo_food_summary(item)
+        for item in find_foods_by_text(
+            query=query,
+            limit=limit_per_slot * 3,
+            food_types=normalized_food_types,
+            meal_candidates_only=True,
+        )
+    ]
+
+    slot_candidates: Dict[str, List[Dict[str, Any]]] = {}
+    for slot_name in ["proteins", "carbs", "vegetables", "fats"]:
+        if slot_name == "proteins":
+            slot_macro_goals = {
+                key: value for key, value in macro_goals.items() if key in {"protein_min", "calories_max"}
+            }
+        elif slot_name == "carbs":
+            slot_macro_goals = {
+                key: value for key, value in macro_goals.items() if key in {"carbs_min", "carbs_max", "calories_max"}
+            }
+        elif slot_name == "vegetables":
+            slot_macro_goals = {
+                key: value for key, value in macro_goals.items() if key in {"calories_max"}
+            }
+        else:
+            slot_macro_goals = {}
+
+        slot_from_query = [
+            item
+            for item in [*semantic_hits, *text_hits]
+            if item.get("meal_role") == slot_name and _matches_macro_goals(
+                {
+                    "protein_per_100g": item.get("per_100g", {}).get("protein_g", 0),
+                    "carbs_per_100g": item.get("per_100g", {}).get("carbs_g", 0),
+                    "calories_per_100g": item.get("per_100g", {}).get("calories_kcal", 0),
+                },
+                slot_macro_goals,
+            )
+        ]
+        slot_from_db = [
+            format_mongo_food_summary(item)
+            for item in find_foods_for_meal_slot(
+                slot_name=slot_name,
+                limit=limit_per_slot * 3,
+                food_types=normalized_food_types,
+                meal_candidates_only=True,
+            )
+        ]
+        slot_candidates[slot_name] = _dedupe_candidates([*slot_from_query, *slot_from_db], limit_per_slot)
+
+    flexible_candidates = _dedupe_candidates(
+        [
+            item
+            for item in [*semantic_hits, *text_hits]
+            if item.get("meal_role") not in {"proteins", "carbs", "vegetables", "fats"}
+        ],
+        limit_per_slot,
+    )
+    if not flexible_candidates:
+        flexible_candidates = _dedupe_candidates(
+            [
+                format_mongo_food_summary(item)
+                for item in find_foods_by_text(
+                    "",
+                    limit_per_slot * 2,
+                    normalized_food_types,
+                    meal_candidates_only=True,
+                )
+            ],
+            limit_per_slot,
+        )
+
+    slot_candidates["flexible"] = flexible_candidates
+    top_matches = _dedupe_candidates([*semantic_hits, *text_hits], limit_per_slot)
+    total_candidates = sum(len(items) for items in slot_candidates.values())
+    return {
+        "query": query,
+        "candidate_strategy": {
+            "vector_backend": "faiss",
+            "retrieval_modes": ["semantic", "text", "slot_pool"],
+            "limit_per_slot": limit_per_slot,
+            "macro_goals": macro_goals,
+            "food_types": normalized_food_types,
+        },
+        "top_matches": top_matches,
+        "slot_candidates": slot_candidates,
+        "total_candidates": total_candidates,
+    }
+
+
 def hybrid_food_search(
     query: str,
     dietary_restrictions: str = "",
     protein_min: float = 0,
+    carbs_min: float = 0,
     carbs_max: float = 999,
     calories_max: float = 999,
     limit: int = 10,
     semantic_weight: float = 0.7,
-    use_full_database: bool = False,
+    food_types: Optional[List[str]] = None,
 ) -> HybridSearchResponse:
+    normalized_food_types = food_types or ["foundation"]
     restrictions = [item.strip() for item in dietary_restrictions.split(",") if item.strip()]
-    semantic_results = semantic_food_search(
+    semantic_results = _safe_similarity_search(
         NutritionQuery(
             query=query,
             dietary_restrictions=restrictions,
             macro_goals={
                 "protein_min": protein_min,
+                "carbs_min": carbs_min,
                 "carbs_max": carbs_max,
                 "calories_max": calories_max,
             },
             limit=limit * 2,
             similarity_threshold=0.2,
-            use_full_database=use_full_database,
+            food_types=normalized_food_types,
         )
     )
-    mongo_results = find_foods_with_macro_filters(
-        query=query,
-        limit=limit * 2,
-        use_full_database=use_full_database,
-        protein_min=protein_min,
-        carbs_max=carbs_max,
-        calories_max=calories_max,
-    )
+    mongo_results = [
+        format_mongo_food_summary(item)
+        for item in find_foods_with_macro_filters(
+            query=query,
+            limit=limit * 2,
+            protein_min=protein_min,
+            carbs_min=carbs_min,
+            carbs_max=carbs_max,
+            calories_max=calories_max,
+            food_types=normalized_food_types,
+            meal_candidates_only=True,
+        )
+    ]
 
     hybrid_results: Dict[Any, Dict[str, Any]] = {}
-    for result in semantic_results.results:
-        fdc_id = result["fdc_id"]
-        hybrid_results[fdc_id] = {
+    for result in semantic_results:
+        hybrid_results[result["id"]] = {
             **result,
             "hybrid_score": result["similarity_score"] * semantic_weight,
             "semantic_score": result["similarity_score"],
-            "traditional_score": 0,
+            "traditional_score": 0.0,
         }
 
     traditional_weight = 1 - semantic_weight
+    query_lower = query.lower()
     for food_item in mongo_results:
-        fdc_id = food_item.get("fdcId")
-        description = food_item.get("description", "").lower()
-        brand = food_item.get("brandOwner", "").lower()
-        ingredients = food_item.get("ingredients", "").lower()
-        query_lower = query.lower()
-
+        name = str(food_item.get("name", "")).lower()
         score = 0.0
-        if query_lower in description:
-            score += 0.4
-        if query_lower in brand:
-            score += 0.3
-        if query_lower in ingredients:
-            score += 0.3
+        if query_lower and query_lower in name:
+            score += 0.8
         for word in query_lower.split():
-            if word in description:
+            if word in name:
                 score += 0.1
-            if word in brand:
-                score += 0.05
-        traditional_score = min(score, 1.0)
+        traditional_score = min(score or 0.2, 1.0)
 
-        if fdc_id in hybrid_results:
-            hybrid_results[fdc_id]["hybrid_score"] += traditional_score * traditional_weight
-            hybrid_results[fdc_id]["traditional_score"] = traditional_score
+        if food_item["id"] in hybrid_results:
+            hybrid_results[food_item["id"]]["hybrid_score"] += traditional_score * traditional_weight
+            hybrid_results[food_item["id"]]["traditional_score"] = traditional_score
         else:
-            nutrition = food_item.get("nutrition_enhanced", {})
-            per_100g = nutrition.get("per_100g", {})
-            hybrid_results[fdc_id] = {
-                "fdc_id": fdc_id,
-                "description": food_item.get("description"),
-                "brand_owner": food_item.get("brandOwner"),
-                "brand_name": food_item.get("brandName"),
-                "food_category": food_item.get("foodCategory"),
-                "nutrition_per_100g": {
-                    "calories": per_100g.get("energy_kcal", 0),
-                    "protein_g": per_100g.get("protein_g", 0),
-                    "fat_g": per_100g.get("total_fat_g", 0),
-                    "carbs_g": per_100g.get("carbs_g", 0),
-                },
-                "primary_macro_category": nutrition.get("macro_breakdown", {}).get(
-                    "primary_macro_category", "unknown"
-                ),
-                "is_high_protein": nutrition.get("macro_breakdown", {}).get("is_high_protein", False),
-                "nutrition_density_score": nutrition.get("nutrition_density_score", 0),
-                "serving_size": food_item.get("servingSize", 0),
+            hybrid_results[food_item["id"]] = {
+                **food_item,
                 "hybrid_score": traditional_score * traditional_weight,
-                "semantic_score": 0,
+                "semantic_score": 0.0,
                 "traditional_score": traditional_score,
             }
 
@@ -298,36 +540,40 @@ def hybrid_food_search(
 
 
 def mongo_food_search(
-    query: str = "coca cola",
+    query: str = "chicken",
     limit: int = 10,
-    use_full_database: bool = True,
+    food_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
+    normalized_food_types = food_types or ["foundation"]
     results = find_foods_by_text(
         query=query,
         limit=limit,
-        use_full_database=use_full_database,
-        include_ingredients=False,
+        food_types=normalized_food_types,
     )
     return {
         "query": query,
-        "collection_name": get_food_collection_name(use_full_database),
+        "collection_name": get_food_collection_name(normalized_food_types),
         "results_found": len(results),
         "results": [format_mongo_food_detail(item) for item in results],
     }
 
 
 def create_vector_index(
-    use_full_database: bool = False,
+    food_types: Optional[List[str]] = None,
     batch_size: int = 1000,
     max_documents: Optional[int] = None,
     recreate: bool = False,
 ) -> Dict[str, Any]:
+    normalized_food_types = food_types or ["foundation"]
     start_time = datetime.now()
-    collection_name = get_food_collection_name(use_full_database)
-    index_path = get_index_directory(use_full_database)
+    collection_name = get_food_collection_name(normalized_food_types)
+    index_path = get_index_directory(normalized_food_types)
+
+    if recreate:
+        drop_vector_store(normalized_food_types)
 
     if index_exists(index_path) and not recreate:
-        vector_store = load_vector_store(use_full_database=use_full_database)
+        vector_store = load_vector_store(food_types=normalized_food_types)
         return {
             "status": "success",
             "message": f"Loaded existing FAISS index for {collection_name}",
@@ -336,7 +582,7 @@ def create_vector_index(
             "index_path": index_path,
         }
 
-    total_docs = count_food_documents(use_full_database)
+    total_docs = count_food_documents(normalized_food_types)
     if total_docs == 0:
         raise HTTPException(
             status_code=404,
@@ -347,26 +593,25 @@ def create_vector_index(
     vector_store = None
     batch: List[Document] = []
     processed_count = 0
-    for food_item in iterate_food_documents(use_full_database, max_documents=max_documents):
+    for food_item in iterate_food_documents(normalized_food_types, max_documents=max_documents):
         try:
+            normalized = normalize_food_document(food_item)
+            per_100g = normalized["per_100g"]
             batch.append(
                 Document(
                     page_content=create_food_text_representation(food_item),
                     metadata={
-                        "fdc_id": food_item.get("fdcId"),
-                        "description": food_item.get("description", ""),
-                        "brand_owner": food_item.get("brandOwner", ""),
-                        "brand_name": food_item.get("brandName", ""),
-                        "food_category": food_item.get("foodCategory", ""),
-                        "gtin_upc": food_item.get("gtinUpc", ""),
-                        "serving_size": food_item.get("servingSize", 0),
-                        "calories_per_100g": food_item.get("nutrition_enhanced", {}).get("per_100g", {}).get("energy_kcal", 0),
-                        "protein_per_100g": food_item.get("nutrition_enhanced", {}).get("per_100g", {}).get("protein_g", 0),
-                        "fat_per_100g": food_item.get("nutrition_enhanced", {}).get("per_100g", {}).get("total_fat_g", 0),
-                        "carbs_per_100g": food_item.get("nutrition_enhanced", {}).get("per_100g", {}).get("carbs_g", 0),
-                        "primary_macro": food_item.get("nutrition_enhanced", {}).get("macro_breakdown", {}).get("primary_macro_category", "unknown"),
-                        "is_high_protein": food_item.get("nutrition_enhanced", {}).get("macro_breakdown", {}).get("is_high_protein", False),
-                        "nutrition_density_score": food_item.get("nutrition_enhanced", {}).get("nutrition_density_score", 0),
+                        "id": normalized.get("id"),
+                        "fdc_id": normalized.get("fdc_id"),
+                        "name": normalized.get("name", ""),
+                        "type": normalized.get("type", "foundation"),
+                        "category": normalized.get("category"),
+                        "meal_role": normalized.get("meal_role", "flexible"),
+                        "measurements": normalized.get("measurements", []),
+                        "calories_per_100g": per_100g.get("calories_kcal", 0),
+                        "protein_per_100g": per_100g.get("protein_g", 0),
+                        "fat_per_100g": per_100g.get("fat_g", 0),
+                        "carbs_per_100g": per_100g.get("carbs_g", 0),
                     },
                 )
             )
@@ -392,7 +637,7 @@ def create_vector_index(
         raise HTTPException(status_code=500, detail="No documents were indexed.")
 
     save_vector_store(vector_store, index_path)
-    cache_vector_store(use_full_database=use_full_database, vector_store=vector_store)
+    cache_vector_store(food_types=normalized_food_types, vector_store=vector_store)
     return {
         "status": "success",
         "message": f"FAISS vector index created successfully for {collection_name}",
@@ -415,11 +660,11 @@ def get_vector_index_status() -> VectorIndexStatusResponse:
     }
 
     response: Dict[str, Any] = {"system_info": system_info}
-    for name, path in {
-        "full_database": get_index_directory(True),
-        "sample_database": get_index_directory(False),
-        "legacy_index": "./nutrition_faiss_index",
+    for name, food_types in {
+        "full_database": ["foundation", "branded"],
+        "sample_database": ["foundation"],
     }.items():
+        path = get_index_directory(food_types)
         file_info = check_file_info(path)
         status = IndexStatus(
             exists=file_info["exists"],
@@ -429,8 +674,8 @@ def get_vector_index_status() -> VectorIndexStatusResponse:
             last_modified=file_info.get("last_modified"),
             error=file_info.get("error"),
         )
-        if name in {"full_database", "sample_database"} and status.exists:
-            vector_store = load_vector_store(use_full_database=(name == "full_database"))
+        if status.exists:
+            vector_store = load_vector_store(food_types=food_types)
             if vector_store is not None:
                 status.loaded = True
                 status.index_size = vector_store.index.ntotal
@@ -439,4 +684,13 @@ def get_vector_index_status() -> VectorIndexStatusResponse:
                     status.memory_usage_mb = (status.index_size * status.embedding_dimension * 4) / (1024**2)
         response[name] = status
 
+    legacy_info = check_file_info("./nutrition_faiss_index")
+    response["legacy_index"] = IndexStatus(
+        exists=legacy_info.get("exists", False),
+        loaded=False,
+        loading=False,
+        file_size_mb=legacy_info.get("file_size_mb"),
+        last_modified=legacy_info.get("last_modified"),
+        error=legacy_info.get("error"),
+    )
     return VectorIndexStatusResponse(**response)
