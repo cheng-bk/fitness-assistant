@@ -17,10 +17,12 @@ Compact meal-planner schema stored in MongoDB:
 
 import json
 import os
-from pymongo import MongoClient, UpdateOne
+from pymongo import UpdateOne
 from pathlib import Path
 from dotenv import load_dotenv
 from typing import Any, Dict, Iterable, List, Optional
+
+from agent.infrastructure.database import get_mongo_client
 
 
 FOUNDATION_DATA_PATH = Path("data/json/food/FoodData_Central_foundation_food_json_2025-12-18.json")
@@ -36,23 +38,6 @@ NUTRIENT_KEYS = {
     "energy_kcal": {"id": 1008, "number": "208"},
     "energy_kj": {"id": 1062, "number": "268"},
 }
-
-
-def get_mongo_client() -> MongoClient:
-    mongo_user = os.getenv("MONGO_USER")
-    mongo_password = os.getenv("MONGO_PASSWORD")
-    mongo_host = os.getenv("MONGO_HOST", "localhost")
-    mongo_port = os.getenv("MONGO_PORT", "27017")
-    mongo_auth_source = os.getenv("MONGO_AUTH_SOURCE", "admin")
-    
-    uri = f"mongodb://{mongo_user}:{mongo_password}@{mongo_host}:{mongo_port}/?authSource={mongo_auth_source}"
-
-    try:
-        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        client.admin.command("ping")
-        return client
-    except Exception as exc:
-        raise RuntimeError(f"Failed to connect to MongoDB: {exc}") from exc
 
 
 def load_foundation_foods(input_path: Path) -> List[Dict[str, Any]]:

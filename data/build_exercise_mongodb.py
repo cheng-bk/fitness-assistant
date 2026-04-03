@@ -4,29 +4,14 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from dotenv import load_dotenv
-from pymongo import MongoClient, UpdateOne
+from pymongo import UpdateOne
+
+from agent.infrastructure.database import get_mongo_client
 
 
 EXERCISES_DATA_PATH = Path("data/json/workout/exercises.json")
 BATCH_SIZE = 128
 COLLECTION = "exercises"
-
-
-def get_mongo_client() -> MongoClient:
-    mongo_user = os.getenv("MONGO_USER")
-    mongo_password = os.getenv("MONGO_PASSWORD")
-    mongo_host = os.getenv("MONGO_HOST", "localhost")
-    mongo_port = os.getenv("MONGO_PORT", "27017")
-    mongo_auth_source = os.getenv("MONGO_AUTH_SOURCE", "admin")
-
-    uri = f"mongodb://{mongo_user}:{mongo_password}@{mongo_host}:{mongo_port}/?authSource={mongo_auth_source}"
-
-    try:
-        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
-        client.admin.command("ping")
-        return client
-    except Exception as exc:
-        raise RuntimeError(f"Failed to connect to MongoDB: {exc}") from exc
 
 
 def load_exercises(input_path: Path) -> List[Dict[str, Any]]:
@@ -49,6 +34,7 @@ def create_indexes(collection) -> None:
     collection.create_index("primaryMuscles")
     collection.create_index("category")
     collection.create_index("equipment")
+    collection.create_index("candidate_flags.is_common_candidate")
 
 
 def write_documents(collection, documents: Iterable[Dict[str, Any]], batch_size: int) -> int:
