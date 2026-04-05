@@ -83,11 +83,11 @@ class ProfileAnswerInterpretation(BaseModel):
 
 class IntentAnalysis(BaseModel):
     primary_goal: str
-    needs_profile_update: bool = False
-    needs_nutrition_search: bool = False
+    profile_update: bool = False
+    food_entity_lookup: bool = False
+    exercise_entity_lookup: bool = False
     generate_meal_plan: bool = False
     generate_workout_plan: bool = False
-    answer_directly: bool = False
     success_criteria: List[str] = Field(default_factory=list)
 
 
@@ -103,17 +103,14 @@ class ProfileMemoryUpdate(BaseModel):
     acknowledgement: Optional[str] = None
 
 
-TOOL_NAME = Literal[
-    "prepare_profile",
-    "search_food_candidates",
-    "generate_meal_plan",
-    "generate_workout_plan",
-]
-
-
 class PlanStep(BaseModel):
     id: str
-    tool_name: TOOL_NAME
+    tool_name: Literal[
+        "search_food_entity",
+        "search_exercise_entity",
+        "generate_meal_plan",
+        "generate_workout_plan",
+    ]
     objective: str
     tool_input: Dict[str, Any] = Field(default_factory=dict)
     status: Literal["pending", "completed", "failed"] = "pending"
@@ -143,22 +140,23 @@ class ActionRecord(BaseModel):
 
 # Tool inputs / outputs
 
-class SearchFoodCandidatesInput(BaseModel):
-    user_input: str
+class SearchFoodEntityInput(BaseModel):
+    query: str
     food_types: List[str] = Field(default_factory=lambda: ["foundation"])
-    user_profile: Optional[Dict[str, Any]] = None
-    protein_min: Optional[float] = None
-    carbs_min: Optional[float] = None
-    carbs_max: Optional[float] = None
-    calories_max: Optional[float] = None
-    limit_per_slot: int = 6
+    limit: int = 5
+    knowledge_top_k: int = 4
+
+
+class SearchExerciseEntityInput(BaseModel):
+    query: str
+    limit: int = 5
+    knowledge_top_k: int = 4
 
 
 class MealPlanInput(BaseModel):
     user_input: str
     user_profile: Dict[str, Any]
     meal_preferences: Dict[str, Any] = Field(default_factory=dict)
-    food_candidates: Dict[str, Any] = Field(default_factory=dict)
     base_url: str
     model_name: str
 

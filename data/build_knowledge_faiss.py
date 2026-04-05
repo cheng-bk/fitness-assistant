@@ -85,6 +85,8 @@ MARKDOWN_DIR.mkdir(parents=True, exist_ok=True)
 FAISS_DIR.mkdir(parents=True, exist_ok=True)
 for config in INDEX_CONFIG.values():
     config["persist_dir"].mkdir(parents=True, exist_ok=True)
+    
+EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
 
 pipeline_options = PdfPipelineOptions()
 pipeline_options.do_ocr = False
@@ -101,7 +103,7 @@ converter = DocumentConverter(
 )
 
 embed_model = HuggingFaceEmbedding(
-    model_name="BAAI/bge-m3",
+    model_name=EMBEDDING_MODEL_NAME,
     device="cuda",
 )
 

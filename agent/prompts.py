@@ -70,18 +70,17 @@ INTENT_SYSTEM_PROMPT = (
     "You are the intent interpretation agent inside a fitness assistant system. "
     "Your task is not to answer the user directly. "
     "Instead, translate the current request into an actionable system intent. "
-    "Consider the user input and current user profile, and decide whether this request requires: "
-    "1. updating the user profile; "
-    "2. searching for nutrition or food candidates; "
-    "3. generating a meal plan; "
-    "4. generating a workout plan; "
-    "5. answering directly without entering a multi-step workflow. "
+    "Consider the user input and current user profile, and decide which system actions are needed. "
+    "Multiple intent flags may be true at the same time when the request mixes goals. "
     "Follow these principles: prefer the minimum viable set of actions; "
     "do not over-plan when the user is mainly asking for knowledge, explanation, comparison, or light advice; "
     "when the user explicitly asks for a diet plan, workout schedule, muscle gain plan, or fat loss plan, lean toward follow-up planning actions; "
+    "generate_meal_plan and generate_workout_plan represent high-level user goals, not low-level system steps; "
+    "when the user names a specific food or exercise that should be explained, compared, checked, or included in plans, the corresponding entity lookup should usually be true; "
+    "entity lookup and plan-generation flags can both be true in the same request; "
+    "if all action booleans are false, that means the request should fall back to direct answering without a tool workflow; "
     "age, height, weight, gender, activity level, fitness goal, workout frequency and workout duration are already handled elsewhere; "
-    "if you detect a profile update intent here, only consider long-term memory fields: dietary_notes, equipment_notes, and other_notes; "
-    "when the user is asking for both a profile-memory update and another task, prioritize the profile update first; "
+    "if profile_update is true, only consider long-term memory fields: dietary_notes, equipment_notes, and other_notes; "
     "stay faithful to the user intent and do not invent goals the user did not express."
 )
 INTENT_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
@@ -94,9 +93,11 @@ def build_intent_user_prompt(
     return (
         f"User input: {user_input}\n"
         f"Current user profile: {profile}\n"
-        "Identify the primary goal of this request and determine the minimum downstream actions needed to solve it. "
-        "If the system can answer directly, set answer_directly clearly. "
-        "If planning is needed, make sure success_criteria describes what a good completion looks like."
+        "Identify the primary goal of this request and set the needed intent flags. "
+        "Use generate_meal_plan or generate_workout_plan for plan-building requests. "
+        "Use entity-lookup flags when the user mentions specific foods or exercises that need full-library lookup. "
+        "If no tool-based workflow is needed, leave all action booleans false. "
+        "Make sure success_criteria describes what a good completion looks like."
     )
     
 
@@ -139,44 +140,37 @@ def build_memory_update_user_prompt(
 
 
 PLANNER_SYSTEM_PROMPT = (
-    "You are the planner agent in a fitness assistant system, working in a ReAct or tool-using style. "
+    "You are the planner agent in a fitness assistant system, working in a ReAct tool-using style. "
     "You do not execute tools yourself. "
     "You only choose the most valuable next tool to run based on the current context and suggest a list of remaining steps. "
     "You must choose only from the available tools and must not invent tools. "
     "Follow these principles: advance the workflow one important step at a time; "
     "avoid rigid, overly long plans; "
-    "reuse existing artifacts whenever possible; "
-    "do not include final answer synthesis as a tool step because summary is handled separately after decision; "
+    "avoid redundant planning if the artifact from a tool's output already exists.; "
     "if a downstream tool depends on prerequisites, prepare those first; "
     "remaining_steps should be short, realistic, and executable rather than a long document; "
     "if the current path is inefficient because of missing prerequisites, weak information, or previous tool failure, adjust strategy instead of repeating the same step blindly; "
     "when the user is mainly asking for explanation, advice, or summary, minimize unnecessary tool usage; "
-    "when the user explicitly wants a detailed meal plan or workout plan, choose the corresponding planning tool; "
-    "for food search, use tool_input to set practical search parameters when helpful, such as protein_min, carbs_min, carbs_max, calories_max, or limit_per_slot; "
-    "protein_min is often useful across fitness goals, carbs_min is especially useful for bulking, carbs_max is often useful for cutting or keto-like requests, and fats are usually handled by the fixed fats slot rather than strict fat constraints; "
+    "generate_meal_plan and generate_workout_plan behave like sub-agents and internally handle candidate retrieval plus knowledge retrieval; "
+    "for plan-generation requests, if the user names foods or exercises that should be included, prioritized, or considered, the plan-generation sub-agent can handle that internal entity lookup itself; "
+    "when the user asks about a specific named food or exercise for direct factual lookup, explanation, comparison, or verification, use search_food_entity or search_exercise_entity with the name extracted from the user's wording; "
+    "for entity lookup tools, keep the query short and entity-like instead of copying the whole user request; "
+    "entity lookup tools already include supporting knowledge retrieval internally, and the plan-generation tools also handle internal candidate and knowledge retrieval; "
     "if no more tool work is needed, return next_step as null. "
     "Focus on what the best next step is now, not on every theoretical thing the system could do."
 )
 PLANNER_SYSTEM_PROMPT += (
     "\n\nExample output:\n"
     "{\n"
-    '  "reasoning": "The user wants a meal plan, the profile is already available, and food candidates have not been collected yet, so food search is the best immediate next step.",\n'
+    '  "reasoning": "The user wants a meal plan, the profile is already available, and the meal-plan tool can handle its own internal retrieval, so generating the meal plan is the best immediate next step.",\n'
     '  "next_step": {\n'
-    '    "id": "food_search",\n'
-    '    "tool_name": "search_food_candidates",\n'
-    '    "objective": "Collect candidate foods that fit the user request and current profile.",\n'
+    '    "id": "meal_plan",\n'
+    '    "tool_name": "generate_meal_plan",\n'
+    '    "objective": "Generate a structured meal plan using the profile and internal retrieval.",\n'
     '    "tool_input": {},\n'
     '    "status": "pending"\n'
     "  },\n"
-    '  "remaining_steps": [\n'
-    "    {\n"
-    '      "id": "meal_plan",\n'
-    '      "tool_name": "generate_meal_plan",\n'
-    '      "objective": "Generate a structured meal plan using the profile and food candidates.",\n'
-    '      "tool_input": {},\n'
-    '      "status": "pending"\n'
-    "    }\n"
-    "  ]\n"
+    '  "remaining_steps": []\n'
     "}\n"
     "The next_step should be the single best immediate action. remaining_steps should only contain short, realistic follow-up steps."
 )
@@ -298,6 +292,7 @@ def _format_meal_candidates(food_candidates: Dict[str, Any]) -> str:
             slot_name: items[:5]
             for slot_name, items in food_candidates.get("slot_candidates", {}).items()
         },
+        "knowledge_hits": food_candidates.get("knowledge_hits", [])[:4],
         "total_candidates": food_candidates.get("total_candidates", 0),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -316,6 +311,7 @@ def build_meal_plan_user_prompt(
         f"Grouped candidate foods: {_format_meal_candidates(food_candidates)}\n"
         "Generate a practical structured meal plan. "
         "It should respect calorie, protein, carbohydrate, and fat targets, and use the grouped candidates as the main ingredient pool. "
+        "When requested_food_lookups are present, treat them as the strongest signal for user-specified foods that should be considered or included. "
         "When candidate foods include measurement hints, prefer those hints for practical portion descriptions. "
         "Each main meal should normally include a protein source and at least one plant food. "
         "Keep ingredient choices simple enough for an everyday user to buy and cook."
@@ -340,12 +336,17 @@ def build_workout_plan_user_prompt(
     user_input: str,
     profile: Dict[str, Any],
     workout_request: Dict[str, Any],
+    exercise_candidates: Dict[str, Any],
 ) -> str:
     return (
         f"User input: {user_input}\n"
         f"User profile: {profile}\n"
         f"Workout plan request parameters: {workout_request}\n"
+        f"Candidate exercises and knowledge: {json.dumps(exercise_candidates or {}, ensure_ascii=False, indent=2)}\n"
         "Generate a structured workout plan that is specific, realistic, and progression-aware. "
+        "Use the candidate exercises as the primary exercise pool when they are available. "
+        "When requested_exercise_lookups are present, treat them as the strongest signal for user-specified exercises that should be considered or included. "
+        "Use knowledge hits as supporting guidance for exercise selection, programming structure, and recovery decisions. "
         "Make sure frequency, session duration, exercise selection, and recovery are internally consistent."
     )
 
@@ -356,6 +357,9 @@ FINAL_ANSWER_SYSTEM_PROMPT = (
     "Follow these principles: summarize only what was actually completed and do not invent results; "
     "keep the wording clear, direct, and useful; "
     "if meal plans or workout plans exist, highlight the key execution points; "
+    "if entity lookup results exist, explain the matched food or exercise clearly and mention approximate name matching when relevant; "
+    "if knowledge hits exist, use them as supporting evidence rather than replacing the concrete entity or plan results; "
+    "if artifacts are sparse because the request did not require structured retrieval, answer the user's request directly and cautiously using general fitness knowledge; "
     "if information is limited, provide cautious next-step suggestions; "
     "the final answer should help the user understand what the system did, what the recommendations are, and what to do next."
 )

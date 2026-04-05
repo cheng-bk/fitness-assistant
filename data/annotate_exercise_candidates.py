@@ -20,55 +20,19 @@ from agent.infrastructure.database import get_mongo_client
 
 
 COLLECTION = "exercises"
-DEFAULT_BATCH_SIZE = 256
-DEFAULT_MIN_SELECTIONS = 3
-DEFAULT_MAX_SELECTIONS = 5
-DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-DEFAULT_MODEL_NAME = "gpt-4o-mini"
+BATCH_SIZE = 256
+MIN_SELECTIONS = 2
+MAX_SELECTIONS = 4
+BASE_URL = os.getenv("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+MODEL_NAME = "glm-5"
 
 
-class ExerciseSelectionResponse(BaseModel):
-    reasoning: str
-    selected_names: List[str] = Field(default_factory=list)
-
-def get_exercise_collection(database_name: str):
-    return get_mongo_client()[database_name][COLLECTION]
-
-
-def normalize_text(value: Any, fallback: str = "unknown") -> str:
-    text = str(value or "").strip().lower()
-    return text or fallback
-
-
-def get_primary_muscles(exercise: Dict[str, Any]) -> List[str]:
-    muscles = exercise.get("primaryMuscles") or []
-    normalized = [normalize_text(item) for item in muscles if str(item).strip()]
-    return normalized or ["unknown"]
-
-
-def build_bucket_keys(exercise: Dict[str, Any]) -> List[str]:
-    category = normalize_text(exercise.get("category"))
-    equipment = normalize_text(exercise.get("equipment"))
-    return [f"{category}::{equipment}::{muscle}" for muscle in get_primary_muscles(exercise)]
-
-
-def clear_candidate_flags(collection) -> int:
-    result = collection.update_many({}, {"$unset": {"candidate_flags": ""}})
-    return int(result.modified_count)
-
-
-def create_indexes(collection) -> None:
-    collection.create_index("candidate_flags.is_common_candidate")
-    collection.create_index("candidate_flags.common_bucket_keys")
-    collection.create_index("candidate_flags.selection_method")
-
-
-def list_bucket_candidates(collection) -> Dict[str, List[Dict[str, Any]]]:
-    bucket_to_exercises: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for exercise in collection.find({}):
-        for bucket_key in build_bucket_keys(exercise):
-            bucket_to_exercises[bucket_key].append(exercise)
-    return bucket_to_exercises
+BUCKET_SYSTEM_PROMPT = (
+    "You are labeling common workout exercises for a fitness assistant. "
+    "Your job is to select the most standard and broadly useful exercises within a bucket. "
+    "Prefer common foundational movements over unusual, gimmicky, or overly specific variants. "
+    "Do not invent exercise names. "
+)
 
 
 def build_bucket_prompt(bucket_key: str, exercises: List[Dict[str, Any]], min_select: int, max_select: int) -> str:
@@ -100,6 +64,45 @@ def build_bucket_prompt(bucket_key: str, exercises: List[Dict[str, Any]], min_se
     )
 
 
+class ExerciseSelectionResponse(BaseModel):
+    reasoning: str
+    selected_names: List[str] = Field(default_factory=list)
+
+
+def get_exercise_collection(database_name: str):
+    return get_mongo_client()[database_name][COLLECTION]
+
+
+def normalize_text(value: Any, fallback: str = "unknown") -> str:
+    text = str(value or "").strip().lower()
+    return text or fallback
+
+
+def build_bucket_key(exercise: Dict[str, Any]) -> str:
+    category = normalize_text(exercise.get("category"))
+    equipment = normalize_text(exercise.get("equipment"))
+    primary_muscle = normalize_text(exercise.get("primaryMuscles")[0])
+    return f"{category}::{equipment}::{primary_muscle}"
+
+
+def clear_candidate_flags(collection) -> int:
+    result = collection.update_many({}, {"$unset": {"candidate_flags": ""}})
+    return int(result.modified_count)
+
+
+def create_indexes(collection) -> None:
+    collection.create_index("candidate_flags.is_candidate")
+    collection.create_index("candidate_flags.bucket_key")
+
+
+def list_bucket_candidates(collection) -> Dict[str, List[Dict[str, Any]]]:
+    bucket_to_exercises: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for exercise in collection.find({}):
+        bucket_key = build_bucket_key(exercise)
+        bucket_to_exercises[bucket_key].append(exercise)
+    return bucket_to_exercises
+
+
 async def select_bucket_candidates_with_llm(
     llm,
     bucket_key: str,
@@ -120,10 +123,7 @@ async def select_bucket_candidates_with_llm(
         [
             SystemMessage(
                 content=(
-                    "You are labeling common workout exercises for a fitness assistant. "
-                    "Your job is to select the most standard and broadly useful exercises within a bucket. "
-                    "Prefer common foundational movements over unusual, gimmicky, or overly specific variants. "
-                    "Do not invent exercise names. "
+                    BUCKET_SYSTEM_PROMPT
                     + build_structured_output_instruction(ExerciseSelectionResponse)
                 )
             ),
@@ -137,11 +137,19 @@ async def select_bucket_candidates_with_llm(
 
     if len(selected_names) < min_select:
         fallback_names = [str(exercise.get("name", "")) for exercise in exercises if exercise.get("name")]
+        appended_names: List[str] = []
         for name in fallback_names:
             if name not in selected_names:
                 selected_names.append(name)
+                appended_names.append(name)
             if len(selected_names) >= min(min_select, len(valid_names)):
                 break
+        if appended_names:
+            response.reasoning = (
+                f"{response.reasoning} "
+                f"Note: The LLM selected only {len(selected_names) - len(appended_names)} valid exercises, which is below the minimum of {min_select}. "
+                f"The following exercises were appended in original order because the LLM selected too few valid items: {', '.join(appended_names)}. "
+            )
 
     return ExerciseSelectionResponse(
         reasoning=response.reasoning,
@@ -159,7 +167,10 @@ async def select_all_buckets(
     llm = build_chat_model(
         base_url=base_url,
         model_name=model_name,
-        temperature=0.1,
+        temperature=0.2,
+        extra_body={
+            "enable_thinking": True,
+        }
     )
 
     selections: Dict[str, ExerciseSelectionResponse] = {}
@@ -183,48 +194,37 @@ def build_operations(
 ) -> Tuple[List[UpdateOne], Dict[str, Any]]:
     exercises = list(collection.find({}))
     selected_by_exercise: Dict[str, Dict[str, Any]] = {}
-    selected_total = 0
 
     for bucket_key, selection in selections_by_bucket.items():
         for rank, exercise_name in enumerate(selection.selected_names, start=1):
-            selected_total += 1
-            record = selected_by_exercise.setdefault(
-                exercise_name,
-                {
-                    "common_bucket_keys": [],
-                    "bucket_rankings": {},
-                    "selection_reasons": {},
-                },
-            )
-            record["common_bucket_keys"].append(bucket_key)
-            record["bucket_rankings"][bucket_key] = rank
-            record["selection_reasons"][bucket_key] = selection.reasoning
+            selected_by_exercise[exercise_name] = {
+                "bucket_key": bucket_key,
+                "rank": rank,
+                "selection_reason": selection.reasoning,
+            }
 
     operations: List[UpdateOne] = []
-    selected_candidates = 0
     for exercise in exercises:
-        exercise_id = str(exercise.get("_id"))
-        selected_record = selected_by_exercise.get(exercise_id)
-        is_common_candidate = selected_record is not None
-        if is_common_candidate:
-            selected_candidates += 1
+        exercise_name = str(exercise.get("name"))
+        selected_record = selected_by_exercise.get(exercise_name)
+        is_candidate = selected_record is not None
 
         annotation = {
-            "is_common_candidate": is_common_candidate,
-            "common_bucket_keys": selected_record["common_bucket_keys"] if selected_record else [],
-            "bucket_rankings": selected_record["bucket_rankings"] if selected_record else {},
-            "selection_reasons": selected_record["selection_reasons"] if selected_record else {},
+            "is_candidate": is_candidate,
+            "bucket_key": selected_record["bucket_key"] if selected_record else None,
+            "rank_in_bucket": selected_record["rank"] if selected_record else None,
+            "selection_reason": selected_record["selection_reason"] if selected_record else None,
             "selection_method": "llm",
             "selection_model": model_name,
             "selection_policy": {
                 "min_select": min_select,
                 "max_select": max_select,
-                "bucket_definition": ["category", "equipment", "primaryMuscles"],
+                "bucket_definition": ["category", "equipment", "primaryMuscle"],
             },
         }
         operations.append(
             UpdateOne(
-                {"_id": exercise_id},
+                {"_id": exercise_name},
                 {"$set": {"candidate_flags": annotation}},
                 upsert=False,
             )
@@ -233,10 +233,9 @@ def build_operations(
     stats = {
         "documents": len(exercises),
         "buckets": len(selections_by_bucket),
-        "selected_slot_count": selected_total,
-        "selected_candidates": selected_candidates,
-        "compressed_documents": len(exercises) - selected_candidates,
-        "compression_ratio": round((len(exercises) - selected_candidates) / len(exercises), 4) if exercises else 0.0,
+        "selected_candidates": len(selected_by_exercise),
+        "compressed_documents": len(exercises) - len(selected_by_exercise),
+        "compression_ratio": round((len(exercises) - len(selected_by_exercise)) / len(exercises), 4) if exercises else 0.0,
     }
     return operations, stats
 
@@ -258,21 +257,7 @@ def write_operations(collection, operations: Iterable[UpdateOne], batch_size: in
     return written
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Annotate common exercise candidates with an LLM.")
-    parser.add_argument("--min-select", type=int, default=DEFAULT_MIN_SELECTIONS)
-    parser.add_argument("--max-select", type=int, default=DEFAULT_MAX_SELECTIONS)
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
-    return parser.parse_args()
-
-
 async def main_async() -> None:
-    args = parse_args()
-    if args.min_select < 1 or args.max_select < args.min_select:
-        raise ValueError("Invalid selection range.")
-
     load_dotenv()
     database_name = os.getenv("MONGO_DB_NAME", "fitness_assistant")
     collection = get_exercise_collection(database_name)
@@ -280,21 +265,21 @@ async def main_async() -> None:
     bucket_to_exercises = list_bucket_candidates(collection)
     selections_by_bucket = await select_all_buckets(
         bucket_to_exercises=bucket_to_exercises,
-        base_url=args.base_url,
-        model_name=args.model_name,
-        min_select=args.min_select,
-        max_select=args.max_select,
+        base_url=BASE_URL,
+        model_name=MODEL_NAME,
+        min_select=MIN_SELECTIONS,
+        max_select=MAX_SELECTIONS,
     )
 
     cleared = clear_candidate_flags(collection)
     operations, stats = build_operations(
         collection=collection,
         selections_by_bucket=selections_by_bucket,
-        min_select=args.min_select,
-        max_select=args.max_select,
-        model_name=args.model_name,
+        min_select=MIN_SELECTIONS,
+        max_select=MAX_SELECTIONS,
+        model_name=MODEL_NAME,
     )
-    written = write_operations(collection, operations, batch_size=args.batch_size)
+    written = write_operations(collection, operations, batch_size=BATCH_SIZE)
 
     print(
         f"Cleared candidate_flags on {cleared} exercises, then annotated {written} exercises "

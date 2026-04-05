@@ -107,7 +107,7 @@ class FitnessGraph:
     async def _interpret_intent(self, state: FitnessState) -> FitnessState:
         intent = await self.intent_agent.run(state["request"])
         state["intent"] = intent.model_dump()
-        state["next_node"] = "memory_update" if intent.needs_profile_update else "planner"
+        state["next_node"] = "memory_update" if intent.profile_update else "planner"
         self._emit_workflow_event(
             "intent",
             "intent_interpreter",
@@ -178,30 +178,40 @@ class FitnessGraph:
         step = state.get("active_step") or {}
         step_input = dict(step.get("tool_input") or {})
 
-        if tool_name == "search_food_candidates":
+        if tool_name == "search_food_entity":
             payload = {
-                "user_input": request.user_input,
+                "query": request.user_input,
                 "food_types": request.food_types,
-                "user_profile": artifacts.get("user_profile") or (profile.model_dump() if profile else None),
+            }
+            payload.update(step_input)
+            return payload
+        if tool_name == "search_exercise_entity":
+            payload = {
+                "query": request.user_input,
             }
             payload.update(step_input)
             return payload
         if tool_name == "generate_meal_plan":
+            meal_preferences = dict(step_input.pop("meal_preferences", {}) or {})
+            if artifacts.get("food_lookup"):
+                meal_preferences.setdefault("food_lookup", artifacts.get("food_lookup"))
             payload = {
                 "user_input": request.user_input,
-                "user_profile": artifacts["user_profile"],
-                "meal_preferences": {},
-                "food_candidates": artifacts.get("food_candidates", {}),
+                "user_profile": artifacts.get("user_profile") or (profile.model_dump() if profile else {}),
+                "meal_preferences": meal_preferences,
                 "base_url": self.base_url,
                 "model_name": self.model_name,
             }
             payload.update(step_input)
             return payload
         if tool_name == "generate_workout_plan":
+            workout_preferences = dict(step_input.pop("workout_preferences", {}) or {})
+            if artifacts.get("exercise_lookup"):
+                workout_preferences.setdefault("exercise_lookup", artifacts.get("exercise_lookup"))
             payload = {
                 "user_input": request.user_input,
-                "user_profile": artifacts["user_profile"],
-                "workout_preferences": {},
+                "user_profile": artifacts.get("user_profile") or (profile.model_dump() if profile else {}),
+                "workout_preferences": workout_preferences,
                 "base_url": self.base_url,
                 "model_name": self.model_name,
             }
@@ -407,7 +417,9 @@ class FitnessGraph:
             "remaining_steps": [],
             "executed_steps": [],
             "latest_observation": "",
-            "artifacts": {},
+            "artifacts": {
+                **({"user_profile": request.user_profile.model_dump()} if request.user_profile else {}),
+            },
             "errors": [],
             "iterations": 0,
             "done": False,

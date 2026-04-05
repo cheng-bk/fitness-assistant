@@ -34,7 +34,6 @@ def create_indexes(collection) -> None:
     collection.create_index("primaryMuscles")
     collection.create_index("category")
     collection.create_index("equipment")
-    collection.create_index("candidate_flags.is_common_candidate")
 
 
 def write_documents(collection, documents: Iterable[Dict[str, Any]], batch_size: int) -> int:

@@ -282,7 +282,6 @@ def iter_food_documents(
 def create_indexes(collection) -> None:
     collection.create_index([("type", 1), ("candidate_flags.is_meal_candidate", 1)])
     collection.create_index([("type", 1), ("candidate_flags.base_tag", 1)])
-    collection.create_index([("type", 1), ("candidate_flags.group_key", 1)])
     collection.create_index([("type", 1), ("candidate_flags.representative_id", 1)])
 
 
