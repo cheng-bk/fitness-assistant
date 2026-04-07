@@ -11,15 +11,18 @@ async def run_fitness_workflow(
     prompt_user: Callable[[str], Awaitable[str]],
     notify_user: Callable[[str], None],
     event_handler: Optional[Callable[[WorkflowEvent], None]] = None,
+    fitness_request: Optional[FitnessRequest] = None,
     profile: Optional[UserProfile] = None,
     max_iterations: int = 6,
 ) -> Dict[str, Any]:
-    user_input = await prompt_user("")
-    request = FitnessRequest(
-        user_input=user_input,
-        user_profile=profile,
-        max_iterations=max_iterations,
-    )
+    request = fitness_request
+    if request is None:
+        user_input = await prompt_user("")
+        request = FitnessRequest(
+            user_input=user_input,
+            user_profile=profile,
+            max_iterations=max_iterations,
+        )
 
     graph = FitnessGraph(
         base_url=base_url,

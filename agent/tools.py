@@ -15,17 +15,31 @@ from .services.exercise_service import generate_workout_plan_artifact, search_ex
 from .services.food_service import generate_meal_plan_artifact, search_food_entity_artifact
 
 
+def _compact_text(value: Any, limit: int = 200) -> str:
+    text = str(value)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
 async def search_knowledge_tool(
     query: str,
     top_k: int = 5,
 ) -> Dict[str, Any]:
     knowledge_hits = retrieve_knowledge_hits(query, top_k=top_k)
+    top_sources = [
+        str(item.get("source") or item.get("title") or item.get("name") or "").strip()
+        for item in knowledge_hits[:3]
+        if str(item.get("source") or item.get("title") or item.get("name") or "").strip()
+    ]
     return {
         "knowledge_lookup": {
             "query": query,
             "knowledge_hits": knowledge_hits,
         },
-        "observation": f"Knowledge search returned {len(knowledge_hits)} hits.",
+        "observation": (
+            f"Knowledge search input: query='{_compact_text(query)}', top_k={top_k}. "
+            f"Returned {len(knowledge_hits)} hits"
+            + (f"; top sources: {top_sources}." if top_sources else ".")
+        ),
     }
 
 
@@ -33,21 +47,39 @@ async def search_food_entity_tool(
     query: str,
     limit: int = 5,
 ) -> Dict[str, Any]:
-    return await search_food_entity_artifact(
+    result = await search_food_entity_artifact(
         query=query,
         food_types=["foundation"],
         limit=limit,
     )
+    food_lookup = result.get("food_lookup") or {}
+    matched_foods = food_lookup.get("matched_foods") or []
+    top_food_names = [str(item.get("name") or "").strip() for item in matched_foods[:3] if item.get("name")]
+    result["observation"] = (
+        f"Food entity lookup input: query='{_compact_text(query)}', limit={limit}. "
+        f"Returned {len(food_lookup.get('name_matches') or [])} name matches and {len(matched_foods)} food records"
+        + (f"; top foods: {top_food_names}." if top_food_names else ".")
+    )
+    return result
 
 
 async def search_exercise_entity_tool(
     query: str,
     limit: int = 5,
 ) -> Dict[str, Any]:
-    return await search_exercise_entity_artifact(
+    result = await search_exercise_entity_artifact(
         query=query,
         limit=limit,
     )
+    exercise_lookup = result.get("exercise_lookup") or {}
+    matched_exercises = exercise_lookup.get("matched_exercises") or []
+    top_exercise_names = [str(item.get("name") or "").strip() for item in matched_exercises[:3] if item.get("name")]
+    result["observation"] = (
+        f"Exercise entity lookup input: query='{_compact_text(query)}', limit={limit}. "
+        f"Returned {len(exercise_lookup.get('name_matches') or [])} name matches and {len(matched_exercises)} exercise records"
+        + (f"; top exercises: {top_exercise_names}." if top_exercise_names else ".")
+    )
+    return result
 
 
 async def generate_meal_plan_tool(
@@ -58,7 +90,7 @@ async def generate_meal_plan_tool(
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model_name: str = "qwen3.5-plus",
 ) -> Dict[str, Any]:
-    return await generate_meal_plan_artifact(
+    result = await generate_meal_plan_artifact(
         user_input=user_input,
         user_profile=user_profile,
         meal_preferences=meal_preferences,
@@ -66,6 +98,17 @@ async def generate_meal_plan_tool(
         base_url=base_url,
         model_name=model_name,
     )
+    plan = result.get("meal_plan") or {}
+    meal_preferences = meal_preferences or {}
+    result["observation"] = (
+        "Meal plan generation input: "
+        f"requested_food_names={meal_preferences.get('requested_food_names') or []}, "
+        f"excluded_food_names={meal_preferences.get('excluded_food_names') or []}, "
+        f"meal_count={meal_preferences.get('meal_count')}, days={meal_preferences.get('days')}, "
+        f"notes={meal_preferences.get('notes') or []}, prior_food_lookups={len(prior_food_lookups or [])}. "
+        f"Generated meal plan '{_compact_text(plan.get('plan_name') or '')}' with {plan.get('days', 0)} days."
+    )
+    return result
 
 
 async def generate_workout_plan_tool(
@@ -76,7 +119,7 @@ async def generate_workout_plan_tool(
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model_name: str = "qwen3.5-plus",
 ) -> Dict[str, Any]:
-    return await generate_workout_plan_artifact(
+    result = await generate_workout_plan_artifact(
         user_input=user_input,
         user_profile=user_profile,
         workout_preferences=workout_preferences,
@@ -84,6 +127,21 @@ async def generate_workout_plan_tool(
         base_url=base_url,
         model_name=model_name,
     )
+    plan = result.get("workout_plan") or {}
+    workout_preferences = workout_preferences or {}
+    result["observation"] = (
+        "Workout plan generation input: "
+        f"requested_exercise_names={workout_preferences.get('requested_exercise_names') or []}, "
+        f"excluded_exercise_names={workout_preferences.get('excluded_exercise_names') or []}, "
+        f"days_per_week={workout_preferences.get('days_per_week')}, duration_minutes={workout_preferences.get('duration_minutes')}, "
+        f"split_type={workout_preferences.get('split_type')}, training_style={workout_preferences.get('training_style')}, "
+        f"equipment_available={workout_preferences.get('equipment_available') or []}, "
+        f"target_muscle_groups={workout_preferences.get('target_muscle_groups') or []}, "
+        f"cardio_preference={workout_preferences.get('cardio_preference')}, "
+        f"notes={workout_preferences.get('notes') or []}, prior_exercise_lookups={len(prior_exercise_lookups or [])}. "
+        f"Generated workout plan '{_compact_text(plan.get('plan_name') or '')}' with {plan.get('days_per_week', 0)} days/week."
+    )
+    return result
 
 
 def build_tool_registry(

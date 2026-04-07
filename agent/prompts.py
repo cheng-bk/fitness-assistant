@@ -97,7 +97,8 @@ def build_intent_user_prompt(
     return (
         f"User input: {user_input}\n"
         f"Current user profile: {profile}\n"
-        f"External workflow context: {workflow_context}\n"
+        + _format_workflow_context(workflow_context)
+        +
         "Identify the primary goal of this request and set the needed intent flags. "
         "Use generate_meal_plan or generate_workout_plan for plan-building requests. "
         "If the user is revising an existing plan, still use the corresponding generate_*_plan flag rather than treating it as a separate task type. "
@@ -224,10 +225,11 @@ def build_planner_user_prompt(
     return (
         f"User input: {user_input}\n"
         f"User profile: {profile}\n"
-        f"External workflow context: {workflow_context}\n"
+        + _format_workflow_context(workflow_context)
+        +
         f"Interpreted intent: {intent}\n"
         f"Completed steps: {completed_steps}\n"
-        f"Current artifact keys: {list(artifacts.keys())}\n"
+        f"Current artifact summaries: {_format_dict(artifacts)}\n"
         f"Available tools:\n{available_tools_text}\n"
         "Provide: "
         "1. the best current next_step; "
@@ -268,12 +270,15 @@ def build_decision_user_prompt(
     remaining_steps: List[Dict[str, Any]],
     iteration: int,
     max_iterations: int,
+    workflow_context: Dict[str, Any],
 ) -> str:
     return (
         f"User input: {user_input}\n"
         f"User profile: {profile}\n"
+        + _format_workflow_context(workflow_context)
+        +
         f"Latest observation: {latest_observation}\n"
-        f"Current artifact keys: {list(artifacts.keys())}\n"
+        f"Current artifact summaries: {_format_dict(artifacts)}\n"
         f"Suggested remaining steps: {remaining_steps}\n"
         f"Current iteration: {iteration}/{max_iterations}\n"
         "Decide whether the workflow should return continue, replan, or finish. "
@@ -317,6 +322,22 @@ def _format_dict(value: Any) -> str:
     if not value:
         return "None"
     return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _format_workflow_context(workflow_context: Dict[str, Any]) -> str:
+    context = workflow_context or {}
+    conversation_summary = context.get("conversation_summary") or context.get("summary")
+    recent_messages = context.get("recent_messages") or []
+    prior_final_answer = context.get("prior_final_answer")
+    carry_over_notes = context.get("carry_over_notes") or []
+    prior_artifact_keys = list((context.get("prior_artifacts") or {}).keys())
+    return (
+        f"Conversation summary: {conversation_summary or 'None'}\n"
+        f"Recent messages: {_format_dict(recent_messages)}\n"
+        f"Prior final answer: {prior_final_answer or 'None'}\n"
+        f"Carry-over notes: {_format_dict(carry_over_notes)}\n"
+        f"Prior artifact keys from context: {prior_artifact_keys}\n"
+    )
 
 
 def build_meal_plan_user_prompt(
@@ -412,7 +433,8 @@ def build_final_answer_user_prompt(
     return (
         f"User input: {user_input}\n"
         f"User profile: {profile}\n"
-        f"External workflow context: {workflow_context}\n"
+        + _format_workflow_context(workflow_context)
+        +
         f"Current artifacts: {artifacts}\n"
         "Generate the final answer using the available artifacts. "
         "When the external context indicates this turn is revising or continuing a previous plan, explain what changed or what was preserved when the artifacts support that. "

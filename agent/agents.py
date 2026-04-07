@@ -120,6 +120,23 @@ def _format_workout_plan_detail(workout_plan: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_final_answer_structured(final_answer: FinalAnswerStructured) -> str:
+    lines: List[str] = [final_answer.overview]
+    if final_answer.completed_work:
+        lines.append("Completed work:")
+        lines.extend(f"- {item}" for item in final_answer.completed_work)
+    if final_answer.nutrition_guidance:
+        lines.append("Nutrition guidance:")
+        lines.extend(f"- {item}" for item in final_answer.nutrition_guidance)
+    if final_answer.training_guidance:
+        lines.append("Training guidance:")
+        lines.extend(f"- {item}" for item in final_answer.training_guidance)
+    if final_answer.next_steps:
+        lines.append("Next steps:")
+        lines.extend(f"- {item}" for item in final_answer.next_steps)
+    return "\n".join(lines)
+
+
 class ProfileCollectionAgent:
     def __init__(self, base_url: str, model_name: str):
         self.llm = build_chat_model(
@@ -293,6 +310,7 @@ class DecisionAgent:
         remaining_steps: List[Dict[str, Any]],
         iteration: int,
         max_iterations: int,
+        workflow_context: Dict[str, Any],
     ) -> Decision:
         return await invoke_structured_with_retry(
             self.llm,
@@ -312,6 +330,7 @@ class DecisionAgent:
                         remaining_steps,
                         iteration,
                         max_iterations,
+                        workflow_context,
                     )
                 ),
             ],
@@ -347,30 +366,22 @@ class SummaryAgent:
             ],
         )
 
-        lines: List[str] = [final_answer.overview]
+        raw_final_answer = _format_final_answer_structured(final_answer)
+        display_lines: List[str] = [final_answer.overview]
         meal_plan = _latest_artifact_value(artifacts, "meal_plan")
         workout_plan = _latest_artifact_value(artifacts, "workout_plan")
         meal_plan_detail = _format_meal_plan_detail(meal_plan) if isinstance(meal_plan, dict) else ""
         workout_plan_detail = _format_workout_plan_detail(workout_plan) if isinstance(workout_plan, dict) else ""
         if meal_plan_detail:
-            lines.append(meal_plan_detail)
+            display_lines.append(meal_plan_detail)
         if workout_plan_detail:
-            lines.append(workout_plan_detail)
-        if final_answer.completed_work:
-            lines.append("Completed work:")
-            lines.extend(f"- {item}" for item in final_answer.completed_work)
-        if final_answer.nutrition_guidance:
-            lines.append("Nutrition guidance:")
-            lines.extend(f"- {item}" for item in final_answer.nutrition_guidance)
-        if final_answer.training_guidance:
-            lines.append("Training guidance:")
-            lines.extend(f"- {item}" for item in final_answer.training_guidance)
-        if final_answer.next_steps:
-            lines.append("Next steps:")
-            lines.extend(f"- {item}" for item in final_answer.next_steps)
+            display_lines.append(workout_plan_detail)
+        if raw_final_answer:
+            display_lines.append(raw_final_answer)
 
         return {
-            "final_answer": "\n".join(lines),
+            "final_answer": raw_final_answer,
+            "final_answer_display": "\n".join(display_lines),
             "observation": "Summary agent produced the final answer.",
         }
 

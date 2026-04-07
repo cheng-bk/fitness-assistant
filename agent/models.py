@@ -42,6 +42,9 @@ class UserProfile(BaseModel):
 
 class WorkflowContext(BaseModel):
     summary: Optional[str] = None
+    conversation_summary: Optional[str] = None
+    recent_messages: List[Dict[str, Any]] = Field(default_factory=list)
+    prior_final_answer: Optional[str] = None
     carry_over_notes: List[str] = Field(default_factory=list)
     prior_artifacts: Dict[str, Any] = Field(default_factory=dict)
 
@@ -134,6 +137,11 @@ class Decision(BaseModel):
     decision: Literal["continue", "replan", "finish"]
     reasoning: str
     should_finish: bool = False
+
+
+class ArtifactEntry(BaseModel):
+    value: Any
+    summary: str = ""
 
 
 class ActionRecord(BaseModel):

@@ -6,7 +6,7 @@ from langgraph.graph.message import add_messages
 from typing_extensions import Annotated
 
 from ..agents import DecisionAgent, IntentInterpreterAgent, MemoryAgent, PlannerAgent, SummaryAgent
-from ..models import ActionRecord, FitnessRequest, IntentAnalysis, UserProfile, WorkflowEvent
+from ..models import ActionRecord, ArtifactEntry, FitnessRequest, IntentAnalysis, UserProfile, WorkflowEvent
 from ..repositories.profile_repository import upsert_profile
 from ..services.profile_service import apply_profile_memory_update
 from ..tools import (
@@ -81,6 +81,49 @@ class FitnessGraph:
     def _is_list_artifact_key(self, key: str) -> bool:
         return key in self.LIST_ARTIFACT_KEYS
 
+    def _is_artifact_entry(self, value: Any) -> bool:
+        return isinstance(value, dict) and "value" in value and "summary" in value
+
+    def _wrap_artifact_value(self, value: Any, summary: str = "") -> Dict[str, Any]:
+        return ArtifactEntry(value=value, summary=summary).model_dump()
+
+    def _unwrap_artifact_value(self, value: Any) -> Any:
+        if self._is_artifact_entry(value):
+            return value.get("value")
+        return value
+
+    def _artifact_summary(self, value: Any) -> str:
+        if self._is_artifact_entry(value):
+            return str(value.get("summary") or "")
+        return ""
+
+    def _artifacts_for_reasoning(self, artifacts: Dict[str, Any]) -> Dict[str, Any]:
+        summarized: Dict[str, Any] = {}
+        for key, value in artifacts.items():
+            if isinstance(value, list):
+                entries = []
+                for item in value:
+                    unwrapped = self._unwrap_artifact_value(item)
+                    summary = self._artifact_summary(item)
+                    entry: Dict[str, Any] = {"summary": summary}
+                    if isinstance(unwrapped, dict):
+                        if unwrapped.get("query"):
+                            entry["query"] = unwrapped.get("query")
+                        if unwrapped.get("plan_name"):
+                            entry["plan_name"] = unwrapped.get("plan_name")
+                    entries.append(entry)
+                summarized[key] = entries
+            else:
+                unwrapped = self._unwrap_artifact_value(value)
+                entry = {"summary": self._artifact_summary(value)}
+                if isinstance(unwrapped, dict):
+                    if unwrapped.get("query"):
+                        entry["query"] = unwrapped.get("query")
+                    if unwrapped.get("plan_name"):
+                        entry["plan_name"] = unwrapped.get("plan_name")
+                summarized[key] = entry
+        return summarized
+
     def _ensure_list_artifact(self, artifacts: Dict[str, Any], key: str) -> List[Any]:
         existing = artifacts.get(key)
         if isinstance(existing, list):
@@ -99,16 +142,16 @@ class FitnessGraph:
     def _latest_artifact(self, artifacts: Dict[str, Any], key: str) -> Any:
         values = artifacts.get(key)
         if isinstance(values, list):
-            return values[-1] if values else None
-        return values
+            return self._unwrap_artifact_value(values[-1]) if values else None
+        return self._unwrap_artifact_value(values)
 
     def _artifact_list(self, artifacts: Dict[str, Any], key: str) -> List[Any]:
         values = artifacts.get(key)
         if values is None:
             return []
         if isinstance(values, list):
-            return values
-        return [values]
+            return [self._unwrap_artifact_value(item) for item in values]
+        return [self._unwrap_artifact_value(values)]
 
     def _resolved_profile(self, state: FitnessState) -> Dict[str, Any]:
         latest_profile = self._latest_artifact(state["artifacts"], "user_profile")
@@ -123,12 +166,14 @@ class FitnessGraph:
         raw_prior_artifacts = dict(request.context.prior_artifacts) if request.context else {}
 
         for key, value in raw_prior_artifacts.items():
+            if key == "final_answer":
+                continue
             if not self._is_list_artifact_key(key):
-                artifacts[key] = value
+                artifacts[key] = self._wrap_artifact_value(value)
                 continue
 
             values = value if isinstance(value, list) else [value]
-            normalized_values = [item for item in values if item is not None]
+            normalized_values = [self._wrap_artifact_value(item) for item in values if item is not None]
             artifacts[key] = normalized_values
             if normalized_values:
                 prior_indexes[f"{key}_index"] = list(range(len(normalized_values)))
@@ -138,13 +183,14 @@ class FitnessGraph:
 
         return artifacts
 
-    def _merge_artifacts(self, artifacts: Dict[str, Any], new_artifacts: Dict[str, Any]) -> List[str]:
+    def _merge_artifacts(self, artifacts: Dict[str, Any], new_artifacts: Dict[str, Any], summary: str = "") -> List[str]:
         merged_keys: List[str] = []
         for key, value in new_artifacts.items():
+            wrapped_value = self._wrap_artifact_value(value, summary=summary)
             if self._is_list_artifact_key(key):
-                self._append_artifact(artifacts, key, value)
+                self._append_artifact(artifacts, key, wrapped_value)
             else:
-                artifacts[key] = value
+                artifacts[key] = wrapped_value
             merged_keys.append(key)
         return merged_keys
 
@@ -222,7 +268,7 @@ class FitnessGraph:
                 "memory_update",
                 "No long-term profile memory changes applied",
                 memory_update=memory_update.model_dump(),
-                profile=request.user_profile.model_dump(),
+                profile=request.user_profile.model_dump() if request.user_profile else {},
             )
         return state
 
@@ -233,7 +279,7 @@ class FitnessGraph:
             self._resolved_profile(state),
             intent,
             state["executed_steps"],
-            state["artifacts"],
+            self._artifacts_for_reasoning(state["artifacts"]),
             list(self.tool_registry.values()),
         )
         next_step = planner_output.next_step
@@ -249,7 +295,13 @@ class FitnessGraph:
             active_step=state["active_step"],
             remaining_steps=state["remaining_steps"],
         )
-        state["messages"].append(SystemMessage(content=f"Planner: {planner_output.reasoning}"))
+        planned_tool = (state["active_step"] or {}).get("tool_name", "none")
+        planned_objective = (state["active_step"] or {}).get("objective", "")
+        state["messages"].append(
+            SystemMessage(
+                content=f"Planner decided next_step={planned_tool}; objective={planned_objective}; reasoning={planner_output.reasoning}"
+            )
+        )
         return state
 
     def _build_tool_payload(self, tool_name: str, state: FitnessState) -> Dict[str, Any]:
@@ -333,7 +385,7 @@ class FitnessGraph:
             tool_result = await self._invoke_tool(tool_name, tool_payload)
             new_artifacts = dict(tool_result)
             observation = new_artifacts.pop("observation", f"Tool {tool_name} completed.")
-            merged_artifact_keys = self._merge_artifacts(state["artifacts"], new_artifacts)
+            merged_artifact_keys = self._merge_artifacts(state["artifacts"], new_artifacts, summary=observation)
             state["latest_observation"] = observation
             self._set_active_step_status(state, "completed")
             self._emit_workflow_event(
@@ -381,7 +433,6 @@ class FitnessGraph:
             state["executed_steps"].append(record.model_dump())
 
         state["iterations"] += 1
-        state["messages"].append(SystemMessage(content=f"Action: {state['latest_observation']}"))
         return state
 
     async def _invoke_tool(self, tool_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -398,6 +449,10 @@ class FitnessGraph:
         raise ValueError(f"Unknown tool: {tool_name}")
 
     async def _observe(self, state: FitnessState) -> FitnessState:
+        step = state.get("active_step") or {}
+        tool_name = step.get("tool_name", "unknown")
+        objective = step.get("objective", "")
+        status = step.get("status", "unknown")
         self._emit_workflow_event(
             "observation",
             "observation",
@@ -405,7 +460,14 @@ class FitnessGraph:
             iteration=state["iterations"],
             observation=state["latest_observation"],
         )
-        state["messages"].append(SystemMessage(content=f"Observation: {state['latest_observation']}"))
+        state["messages"].append(
+            SystemMessage(
+                content=(
+                    f"Observation for tool={tool_name}; objective={objective}; "
+                    f"status={status}; detail={state['latest_observation']}"
+                )
+            )
+        )
         return state
 
     async def _decide(self, state: FitnessState) -> FitnessState:
@@ -427,11 +489,12 @@ class FitnessGraph:
         decision = await self.decision_agent.run(
             request=request,
             profile=self._resolved_profile(state),
-            artifacts=state["artifacts"],
+            artifacts=self._artifacts_for_reasoning(state["artifacts"]),
             latest_observation=state["latest_observation"],
             remaining_steps=state["remaining_steps"],
             iteration=state["iterations"],
             max_iterations=request.max_iterations,
+            workflow_context=request.context.model_dump() if request.context else {},
         )
 
         if decision.should_finish or decision.decision == "finish":
@@ -455,12 +518,16 @@ class FitnessGraph:
             iteration=state["iterations"],
             next_node=state["next_node"],
         )
-        state["messages"].append(SystemMessage(content=f"Decision: {decision.reasoning}"))
+        state["messages"].append(
+            SystemMessage(
+                content=f"Decision={decision.decision}; next_node={state['next_node']}; reasoning={decision.reasoning}"
+            )
+        )
         return state
 
 
     async def _finalize(self, state: FitnessState) -> FitnessState:
-        if not state["artifacts"].get("final_answer"):
+        if not self._latest_artifact(state["artifacts"], "final_answer"):
             self._emit_workflow_event(
                 "summary_start",
                 "finalize",
@@ -471,13 +538,16 @@ class FitnessGraph:
             final_result = await self.summary_agent.run(
                 user_input=state["request"].user_input,
                 profile=self._resolved_profile(state),
-                artifacts=state["artifacts"],
+                artifacts={key: self._latest_artifact(state["artifacts"], key) if not isinstance(state["artifacts"].get(key), list) else self._artifact_list(state["artifacts"], key) for key in state["artifacts"].keys()},
                 workflow_context=state["request"].context.model_dump() if state["request"].context else {},
             )
             final_artifact = dict(final_result)
+            final_answer_display = str(final_artifact.pop("final_answer_display", "") or "")
             observation = final_artifact.pop("observation", "Summary agent completed.")
-            self._merge_artifacts(state["artifacts"], final_artifact)
+            self._merge_artifacts(state["artifacts"], final_artifact, summary=observation)
             state["latest_observation"] = observation
+            if final_answer_display:
+                state["final_answer"] = final_answer_display
             self._emit_workflow_event(
                 "summary_result",
                 "finalize",
@@ -487,9 +557,11 @@ class FitnessGraph:
                 artifact_keys=list(final_artifact.keys()),
             )
 
-        state["final_answer"] = state["artifacts"].get(
-            "final_answer", "The workflow completed without a final answer."
-        )
+        if not state["final_answer"]:
+            state["final_answer"] = (
+                self._latest_artifact(state["artifacts"], "final_answer")
+                or "The workflow completed without a final answer."
+            )
         self._emit_workflow_event(
             "final_answer",
             "finalize",
@@ -514,7 +586,7 @@ class FitnessGraph:
     async def run(self, request: FitnessRequest) -> Dict[str, Any]:
         initial_artifacts = self._load_prior_artifacts(request)
         if request.user_profile:
-            initial_artifacts["user_profile"] = request.user_profile.model_dump()
+            initial_artifacts["user_profile"] = self._wrap_artifact_value(request.user_profile.model_dump())
         initial_state: FitnessState = {
             "messages": [HumanMessage(content=request.user_input)],
             "request": request,
