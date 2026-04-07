@@ -1,5 +1,4 @@
 import os
-import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -42,11 +41,15 @@ for config in INDEX_CONFIG.values():
 EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
 EMBEDDING_DEVICE = "cuda"
 EMBED_DIM = 1024
+HF_MODEL_CACHE_DIR = os.getenv("HF_MODEL_CACHE_DIR")
+
+Path(HF_MODEL_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 
 
 embed_model = HuggingFaceEmbedding(
     model_name=EMBEDDING_MODEL_NAME,
     device=EMBEDDING_DEVICE,
+    cache_folder=HF_MODEL_CACHE_DIR,
 )
 
 Settings.embed_model = embed_model
@@ -107,8 +110,11 @@ def build_name_nodes(entity_type: str, database_name: str) -> List[TextNode]:
     return nodes
 
 
-def build_storage_context() -> tuple[faiss.IndexFlatL2, StorageContext]:
-    faiss_index = faiss.IndexFlatL2(EMBED_DIM)
+def build_storage_context() -> tuple[faiss.Index, StorageContext]:
+    faiss_index = faiss.IndexPreTransform(
+        faiss.NormalizationTransform(EMBED_DIM),
+        faiss.IndexFlatIP(EMBED_DIM),
+    )
     vector_store = FaissVectorStore(faiss_index=faiss_index)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
     return faiss_index, storage_context
@@ -168,10 +174,11 @@ def test_similarity_from_disk(entity_type: str, query: Optional[str] = None, top
         print(f"\n{'-' * 50} Result {i} {'-' * 50}")
         print(node.text)
         pprint(node.metadata)
+        print(node.score)
 
 
 def main() -> None:
-    force_rebuild = True
+    force_rebuild = False
 
     load_dotenv()
 

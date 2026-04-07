@@ -76,9 +76,12 @@ INTENT_SYSTEM_PROMPT = (
     "do not over-plan when the user is mainly asking for knowledge, explanation, comparison, or light advice; "
     "when the user explicitly asks for a diet plan, workout schedule, muscle gain plan, or fat loss plan, lean toward follow-up planning actions; "
     "generate_meal_plan and generate_workout_plan represent high-level user goals, not low-level system steps; "
+    "when the user is modifying, refining, or reacting to an existing meal or workout plan, generate_meal_plan or generate_workout_plan should usually be true; "
     "when the user names a specific food or exercise that should be explained, compared, checked, or included in plans, the corresponding entity lookup should usually be true; "
     "entity lookup and plan-generation flags can both be true in the same request; "
     "if all action booleans are false, that means the request should fall back to direct answering without a tool workflow; "
+    "external workflow context may contain a summary of previous conversation and prior artifacts from an earlier run; "
+    "use that context to detect when the user is revising, continuing, or reacting to an existing plan rather than starting a brand-new task; "
     "age, height, weight, gender, activity level, fitness goal, workout frequency and workout duration are already handled elsewhere; "
     "if profile_update is true, only consider long-term memory fields: dietary_notes, equipment_notes, and other_notes; "
     "stay faithful to the user intent and do not invent goals the user did not express."
@@ -89,14 +92,19 @@ INTENT_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
 def build_intent_user_prompt(
     user_input: str,
     profile: Dict[str, Any],
+    workflow_context: Dict[str, Any],
 ) -> str:
     return (
         f"User input: {user_input}\n"
         f"Current user profile: {profile}\n"
+        f"External workflow context: {workflow_context}\n"
         "Identify the primary goal of this request and set the needed intent flags. "
         "Use generate_meal_plan or generate_workout_plan for plan-building requests. "
+        "If the user is revising an existing plan, still use the corresponding generate_*_plan flag rather than treating it as a separate task type. "
         "Use entity-lookup flags when the user mentions specific foods or exercises that need full-library lookup. "
+        "When a plan request explicitly mentions foods or exercises the user prefers, dislikes, wants included, or wants avoided, the corresponding entity-lookup flag should usually also be true. "
         "If no tool-based workflow is needed, leave all action booleans false. "
+        "Use the external workflow context when the user appears to be modifying, continuing, or reacting to a previous result. "
         "Make sure success_criteria describes what a good completion looks like."
     )
     
@@ -146,16 +154,24 @@ PLANNER_SYSTEM_PROMPT = (
     "You must choose only from the available tools and must not invent tools. "
     "Follow these principles: advance the workflow one important step at a time; "
     "avoid rigid, overly long plans; "
+    "treat each iteration as costly and prefer the shortest effective tool path; "
+    "do not use extra iterations when the current request can be satisfied in fewer steps; "
     "avoid redundant planning if the artifact from a tool's output already exists.; "
     "if a downstream tool depends on prerequisites, prepare those first; "
     "remaining_steps should be short, realistic, and executable rather than a long document; "
     "if the current path is inefficient because of missing prerequisites, weak information, or previous tool failure, adjust strategy instead of repeating the same step blindly; "
     "when the user is mainly asking for explanation, advice, or summary, minimize unnecessary tool usage; "
-    "generate_meal_plan and generate_workout_plan behave like sub-agents and internally handle candidate retrieval plus knowledge retrieval; "
-    "for plan-generation requests, if the user names foods or exercises that should be included, prioritized, or considered, the plan-generation sub-agent can handle that internal entity lookup itself; "
+    "external workflow context may describe prior plans, prior lookup results, or the user's dissatisfaction with a previous result; "
+    "when useful prior artifacts already exist, prefer revising or extending them instead of rebuilding everything from scratch; "
+    "generate_meal_plan and generate_workout_plan behave like sub-agents and internally handle candidate retrieval; "
+    "for meal-plan requests that mention specific foods the user wants to include, prioritize, avoid, or replace, prefer doing search_food_entity first before generate_meal_plan; "
+    "this is especially useful for requests like preferring beef, disliking chicken, wanting salmon included, or asking to avoid eggs, because the later meal-plan step can then use the retrieved food artifacts as grounded context; "
+    "for workout-plan requests that depend on specific named exercises, prefer doing search_exercise_entity first before generate_workout_plan; "
     "when the user asks about a specific named food or exercise for direct factual lookup, explanation, comparison, or verification, use search_food_entity or search_exercise_entity with the name extracted from the user's wording; "
-    "for entity lookup tools, keep the query short and entity-like instead of copying the whole user request; "
-    "entity lookup tools already include supporting knowledge retrieval internally, and the plan-generation tools also handle internal candidate and knowledge retrieval; "
+    "when the user needs supporting factual or principle-based knowledge beyond entity records or plan generation, use search_knowledge as a separate tool; "
+    "for entity lookup tools, tool_input should normally contain only query, and query must stay short and entity-like instead of copying the whole user request; "
+    "for generate_meal_plan, only fill meal_preferences fields that are clearly supported by the user's current request or relevant context, such as requested_food_names, excluded_food_names, meal_count, days, or short temporary notes; if the user did not specify a field, leave it out instead of guessing; "
+    "for generate_workout_plan, only fill workout_preferences fields that are clearly supported by the user's current request or relevant context, such as requested_exercise_names, excluded_exercise_names, days_per_week, duration_minutes, split_type, training_style, or short temporary notes; if the user did not specify a field, leave it out instead of guessing; "
     "if no more tool work is needed, return next_step as null. "
     "Focus on what the best next step is now, not on every theoretical thing the system could do."
 )
@@ -179,10 +195,12 @@ PLANNER_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
 
 def build_planner_user_prompt(
     user_input: str,
+    profile: Dict[str, Any],
     intent: Dict[str, Any],
     completed_steps: List[Dict[str, Any]],
     artifacts: Dict[str, Any],
     available_tools: List[BaseTool],
+    workflow_context: Dict[str, Any],
 ) -> str:
     tool_lines: List[str] = []
     for tool in available_tools:
@@ -204,6 +222,8 @@ def build_planner_user_prompt(
 
     return (
         f"User input: {user_input}\n"
+        f"User profile: {profile}\n"
+        f"External workflow context: {workflow_context}\n"
         f"Interpreted intent: {intent}\n"
         f"Completed steps: {completed_steps}\n"
         f"Current artifact keys: {list(artifacts.keys())}\n"
@@ -213,6 +233,7 @@ def build_planner_user_prompt(
         "2. a short reasoning; "
         "3. optional remaining_steps. "
         "If the existing artifacts are already enough and no more tool work is needed, return next_step as null. "
+        "Use external context and prior artifacts to continue or revise previous work when that is more efficient than starting over. "
         "tool_name must come strictly from the tool names listed above. "
         "Check for reusable artifacts before planning duplicate tool executions. "
         "If the previous step failed or produced very low value, avoid meaningless retries and choose a better path."
@@ -227,6 +248,8 @@ DECISION_SYSTEM_PROMPT = (
     "Follow these principles: if the current artifacts are already enough for a high-quality answer, finish; "
     "if the current path is poor, a tool failed, or the next step should change direction, choose replan; "
     "if there are still necessary and clearly useful next steps, continue; "
+    "prefer fewer iterations when they are enough to answer the user well; "
+    "do not keep the loop alive just because another tool call might add marginal value; "
     "when the maximum iteration limit is near or reached, prefer finishing over endless attempts; "
     "base your judgment on whether the user's question can already be answered reliably; "
     "do not keep going forever just because more information could theoretically be collected; "
@@ -238,6 +261,7 @@ DECISION_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
 
 def build_decision_user_prompt(
     user_input: str,
+    profile: Dict[str, Any],
     artifacts: Dict[str, Any],
     latest_observation: str,
     remaining_steps: List[Dict[str, Any]],
@@ -246,6 +270,7 @@ def build_decision_user_prompt(
 ) -> str:
     return (
         f"User input: {user_input}\n"
+        f"User profile: {profile}\n"
         f"Latest observation: {latest_observation}\n"
         f"Current artifact keys: {list(artifacts.keys())}\n"
         f"Suggested remaining steps: {remaining_steps}\n"
@@ -262,10 +287,15 @@ MEAL_PLAN_SYSTEM_PROMPT = (
     "Your task is to generate a structured meal plan using the user profile, calorie and macro targets, meal preferences, and grouped candidate foods when available. "
     "Follow these principles: the plan must be practical and executable; "
     "align it with the user's goal such as muscle gain, fat loss, or maintenance; "
-    "treat grouped candidate foods as the primary ingredient pool; "
+    "treat grouped candidate foods as the primary ingredient pool and a strong reference set rather than a hard whitelist; "
+    "represent meals as actual dishes, plates, bowls, or snack combinations a real user could prepare and eat; "
     "prefer proteins for main meals, vegetables for volume and micronutrient coverage, carbs for energy support, and fats in smaller amounts; "
     "foundation foods are generic ingredients, so choose realistic portions in grams or common household amounts; "
+    "when a meal uses multiple ingredients, make the ingredient composition explicit and assign a concrete amount to each ingredient; "
+    "do not output meals as loose, isolated ingredient piles without dish structure or per-ingredient quantities; "
     "when measurements or portion hints are available in candidate foods, use them to make portions more natural and actionable; "
+    "when a candidate is not the exact best fit for the user's situation, you may substitute a similar food that plays the same role in the meal; "
+    "when you use a similar substitute, estimate portions and nutrition by referencing the closest relevant candidates instead of inventing arbitrary numbers; "
     "reuse candidate foods intelligently instead of forcing too much variety; "
     "keep meals, portions, calories, and macros realistic; "
     "daily totals should stay close to target macros without requiring perfect mathematical precision; "
@@ -281,37 +311,33 @@ MEAL_PLAN_SYSTEM_PROMPT = (
 MEAL_PLAN_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
 
 
-def _format_meal_candidates(food_candidates: Dict[str, Any]) -> str:
-    if not food_candidates:
+def _format_dict(dict_object: Dict[str, Any]) -> str:
+    if not dict_object:
         return "None"
-
-    payload = {
-        "candidate_strategy": food_candidates.get("candidate_strategy", {}),
-        "top_matches": food_candidates.get("top_matches", [])[:6],
-        "slot_candidates": {
-            slot_name: items[:5]
-            for slot_name, items in food_candidates.get("slot_candidates", {}).items()
-        },
-        "knowledge_hits": food_candidates.get("knowledge_hits", [])[:4],
-        "total_candidates": food_candidates.get("total_candidates", 0),
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return json.dumps(dict_object, ensure_ascii=False, indent=2)
 
 
 def build_meal_plan_user_prompt(
     user_input: str,
     profile: Dict[str, Any],
-    meal_request: Dict[str, Any],
     food_candidates: Dict[str, Any],
+    meal_preferences: Dict[str, Any],
+    prior_food_lookups: List[Dict[str, Any]],
 ) -> str:
     return (
         f"User input: {user_input}\n"
         f"User profile: {profile}\n"
-        f"Meal plan request parameters: {meal_request}\n"
-        f"Grouped candidate foods: {_format_meal_candidates(food_candidates)}\n"
+        f"Grouped candidate foods: {_format_dict(food_candidates)}\n"
+        f"Meal preferences: {_format_dict(meal_preferences)}\n"
+        f"Prior food lookups: {_format_dict(prior_food_lookups)}\n"
         "Generate a practical structured meal plan. "
-        "It should respect calorie, protein, carbohydrate, and fat targets, and use the grouped candidates as the main ingredient pool. "
-        "When requested_food_lookups are present, treat them as the strongest signal for user-specified foods that should be considered or included. "
+        "It should respect calorie, protein, carbohydrate, and fat targets, and use the grouped candidates as the main ingredient pool and reference set. "
+        "When prior food lookups are present, treat them as the strongest validated signal for specific foods that should shape the plan. "
+        "When meal preferences specify excluded foods, avoid those foods unless a strong safety or feasibility reason requires mentioning them. "
+        "If a grouped candidate is not the exact best fit, you may use a similar ingredient that serves the same nutritional and culinary role. "
+        "When you do that, ground the replacement in the closest relevant candidates and use those candidates as the nutrition reference instead of making up unsupported values. "
+        "Represent each meal as a real dish, plate, bowl, or snack idea rather than a loose list of unrelated ingredients. "
+        "For every meal, make the component ingredients explicit and give a concrete amount for each ingredient you include. "
         "When candidate foods include measurement hints, prefer those hints for practical portion descriptions. "
         "Each main meal should normally include a protein source and at least one plant food. "
         "Keep ingredient choices simple enough for an everyday user to buy and cook."
@@ -346,6 +372,7 @@ def build_workout_plan_user_prompt(
         "Generate a structured workout plan that is specific, realistic, and progression-aware. "
         "Use the candidate exercises as the primary exercise pool when they are available. "
         "When requested_exercise_lookups are present, treat them as the strongest signal for user-specified exercises that should be considered or included. "
+        "When excluded_exercise_lookups or excluded_exercise_names are present, avoid programming those exercises unless there is a compelling reason to mention an alternative or caution. "
         "Use knowledge hits as supporting guidance for exercise selection, programming structure, and recovery decisions. "
         "Make sure frequency, session duration, exercise selection, and recovery are internally consistent."
     )
@@ -365,11 +392,19 @@ FINAL_ANSWER_SYSTEM_PROMPT = (
 )
 FINAL_ANSWER_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
 
-def build_final_answer_user_prompt(user_input: str, artifacts: Dict[str, Any]) -> str:
+def build_final_answer_user_prompt(
+    user_input: str,
+    profile: Dict[str, Any],
+    artifacts: Dict[str, Any],
+    workflow_context: Dict[str, Any],
+) -> str:
     return (
         f"User input: {user_input}\n"
+        f"User profile: {profile}\n"
+        f"External workflow context: {workflow_context}\n"
         f"Current artifacts: {artifacts}\n"
         "Generate the final answer using the available artifacts. "
+        "When the external context indicates this turn is revising or continuing a previous plan, explain what changed or what was preserved when the artifacts support that. "
         "The response should cover an overview, completed work, nutrition guidance, training guidance, and next steps when supported by the artifacts. "
         "If some parts are not supported, keep them brief and do not fabricate content."
     )

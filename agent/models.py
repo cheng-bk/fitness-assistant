@@ -40,9 +40,16 @@ class UserProfile(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class WorkflowContext(BaseModel):
+    summary: Optional[str] = None
+    carry_over_notes: List[str] = Field(default_factory=list)
+    prior_artifacts: Dict[str, Any] = Field(default_factory=dict)
+
+
 class FitnessRequest(BaseModel):
     user_input: str
     user_profile: Optional[UserProfile] = None
+    context: Optional[WorkflowContext] = None
     food_types: List[str] = Field(default_factory=lambda: ["foundation"])
     max_iterations: int = Field(default=6, ge=2, le=12)
 
@@ -106,6 +113,7 @@ class ProfileMemoryUpdate(BaseModel):
 class PlanStep(BaseModel):
     id: str
     tool_name: Literal[
+        "search_knowledge",
         "search_food_entity",
         "search_exercise_entity",
         "generate_meal_plan",
@@ -141,38 +149,44 @@ class ActionRecord(BaseModel):
 # Tool inputs / outputs
 
 class SearchFoodEntityInput(BaseModel):
-    query: str
-    food_types: List[str] = Field(default_factory=lambda: ["foundation"])
-    limit: int = 5
-    knowledge_top_k: int = 4
+    query: str = Field(description="A short food name string to look up, not the full user request.")
+    limit: int = Field(default=5, description="Maximum number of matched food records to return.")
 
 
 class SearchExerciseEntityInput(BaseModel):
-    query: str
-    limit: int = 5
-    knowledge_top_k: int = 4
+    query: str = Field(description="A short exercise name string to look up, not the full user request.")
+    limit: int = Field(default=5, description="Maximum number of matched exercise records to return.")
+    
+    
+class SearchKnowledgeInput(BaseModel):
+    query: str = Field(description="A short user question or information need in English, not the full user request.")
+    top_k: int = Field(default=5, description="Maximum number of knowledge hits to return.")
+
+
+class MealPreferencesInput(BaseModel):
+    requested_food_names: List[str] = Field(default_factory=list, description="Food names the plan should include or prioritize.")
+    excluded_food_names: List[str] = Field(default_factory=list, description="Food names the plan should avoid.")
+    meal_count: Optional[int] = Field(default=None, description="Preferred meals per day.")
+    days: Optional[int] = Field(default=None, description="Preferred plan length in days.")
+    notes: List[str] = Field(default_factory=list, description="Short temporary constraints for this plan only.")
 
 
 class MealPlanInput(BaseModel):
-    user_input: str
-    user_profile: Dict[str, Any]
-    meal_preferences: Dict[str, Any] = Field(default_factory=dict)
-    base_url: str
-    model_name: str
+    meal_preferences: MealPreferencesInput = Field(default_factory=MealPreferencesInput, description="Structured short-term meal-planning preferences.")
 
 
-class MealPlanRequest(BaseModel):
-    meal_count: int = 5
-    days: int = 7
-    preferences: Dict[str, Any] = Field(default_factory=dict)
+class WorkoutPreferencesInput(BaseModel):
+    requested_exercise_names: List[str] = Field(default_factory=list, description="Exercise names the plan should include or prioritize.")
+    excluded_exercise_names: List[str] = Field(default_factory=list, description="Exercise names the plan should avoid.")
+    days_per_week: Optional[int] = Field(default=None, description="Preferred training frequency per week.")
+    duration_minutes: Optional[int] = Field(default=None, description="Preferred session length in minutes.")
+    split_type: Optional[str] = Field(default=None, description="Preferred training split, such as full_body or upper_lower.")
+    training_style: Optional[str] = Field(default=None, description="Preferred training style, such as hypertrophy or strength.")
+    notes: List[str] = Field(default_factory=list, description="Short temporary constraints for this plan only.")
 
 
 class WorkoutPlanInput(BaseModel):
-    user_input: str
-    user_profile: Dict[str, Any]
-    workout_preferences: Dict[str, Any] = Field(default_factory=dict)
-    base_url: str
-    model_name: str
+    workout_preferences: WorkoutPreferencesInput = Field(default_factory=WorkoutPreferencesInput, description="Structured short-term workout-planning preferences.")
     
 
 class WorkoutPlanRequest(BaseModel):

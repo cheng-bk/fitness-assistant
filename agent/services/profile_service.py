@@ -178,7 +178,7 @@ def apply_profile_memory_update(profile: UserProfile, memory_update: ProfileMemo
     )
     profile.other_notes = _merge_other_notes(
         profile.other_notes,
-        memory_update.other_notes_to_add,
+        memory_update.other_notes,
         memory_update.other_notes_to_remove,
     )
     profile.updated_at = datetime.now()

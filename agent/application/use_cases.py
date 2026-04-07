@@ -5,23 +5,31 @@ from ..models import FitnessRequest, UserProfile, WorkflowEvent
 
 
 async def run_fitness_workflow(
-    fitness_request: FitnessRequest,
     base_url: str,
     model_name: str,
-    planner_model_name: Optional[str],
+    strong_model_name: Optional[str],
     prompt_user: Callable[[str], Awaitable[str]],
     notify_user: Callable[[str], None],
     event_handler: Optional[Callable[[WorkflowEvent], None]] = None,
+    profile: Optional[UserProfile] = None,
+    max_iterations: int = 6,
 ) -> Dict[str, Any]:
+    user_input = await prompt_user("")
+    request = FitnessRequest(
+        user_input=user_input,
+        user_profile=profile,
+        max_iterations=max_iterations,
+    )
+
     graph = FitnessGraph(
         base_url=base_url,
         model_name=model_name,
-        planner_model_name=planner_model_name,
+        strong_model_name=strong_model_name,
         prompt_user=prompt_user,
         notify_user=notify_user,
         event_handler=event_handler,
     )
-    return await graph.run(fitness_request)
+    return await graph.run(request)
 
 
 async def run_profile_onboarding_workflow(

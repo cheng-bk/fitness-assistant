@@ -64,6 +64,7 @@ def _build_event_handler():
             
         elif event_type == "memory_update":
             print(f"- current profile: \n{_format_json(payload.get('profile'))}")
+            print(f"- memory_update: \n{_format_json(payload.get('memory_update'))}")
             
         elif event_type == "plan":
             active_step = payload.get("active_step") or {}
@@ -195,16 +196,16 @@ async def interactive_chat(args: argparse.Namespace) -> None:
         event_handler=event_handler,
     )
 
-    # await run_fitness_workflow(
-    #     profile=profile,
-    #     base_url=args.base_url,
-    #     model_name=args.fitness_model,
-    #     planner_model_name=args.fitness_strong_model or args.fitness_model,
-    #     prompt_user=_prompt_user,
-    #     notify_user=_notify_user,
-    #     event_handler=event_handler,
-    #     max_iterations=args.max_iterations
-    # )
+    await run_fitness_workflow(
+        profile=profile,
+        base_url=args.base_url,
+        model_name=args.fitness_model,
+        strong_model_name=args.fitness_strong_model or args.fitness_model,
+        prompt_user=_prompt_user,
+        notify_user=_notify_user,
+        event_handler=event_handler,
+        max_iterations=args.max_iterations
+    )
 
 
 def main() -> None:

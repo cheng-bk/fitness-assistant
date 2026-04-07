@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import os
 from typing import List, Dict, Any
 
 import faiss
@@ -69,7 +70,7 @@ pdf_file: List[Dict[str, str]] = [
 
 OUTPUT_DIR = Path("data/processed")
 MARKDOWN_DIR = OUTPUT_DIR / "markdown"
-FAISS_DIR = OUTPUT_DIR / "faiss_store"
+FAISS_DIR = OUTPUT_DIR / "faiss_store" / "knowledge"
 INDEX_CONFIG = {
     "text": {
         "persist_dir": FAISS_DIR / "text",
@@ -87,6 +88,9 @@ for config in INDEX_CONFIG.values():
     config["persist_dir"].mkdir(parents=True, exist_ok=True)
     
 EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
+HF_MODEL_CACHE_DIR = os.getenv("HF_MODEL_CACHE_DIR")
+
+Path(HF_MODEL_CACHE_DIR).mkdir(parents=True, exist_ok=True)
 
 pipeline_options = PdfPipelineOptions()
 pipeline_options.do_ocr = False
@@ -105,6 +109,7 @@ converter = DocumentConverter(
 embed_model = HuggingFaceEmbedding(
     model_name=EMBEDDING_MODEL_NAME,
     device="cuda",
+    cache_folder=HF_MODEL_CACHE_DIR,
 )
 
 Settings.embed_model = embed_model
@@ -186,6 +191,46 @@ def is_table_line(line: str) -> bool:
 
 def split_text_block(text: str) -> List[str]:
     return [part.strip() for part in TEXT_SPLITTER.split_text(text) if part.strip()]
+
+
+def normalize_table_cell(cell: str) -> str:
+    return f" {cell.strip()} "
+
+
+def normalize_table_separator(cell: str) -> str:
+    stripped = cell.strip()
+    if set(stripped) <= {"-", ":"} and stripped:
+        leading_colon = ":" if stripped.startswith(":") else ""
+        trailing_colon = ":" if stripped.endswith(":") else ""
+        core = "----"
+        return f" {leading_colon}{core}{trailing_colon} "
+    return normalize_table_cell(cell)
+
+
+def normalize_markdown_table(table_text: str) -> str:
+    normalized_lines: List[str] = []
+    for raw_line in table_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+
+        has_leading_pipe = stripped.startswith("|")
+        has_trailing_pipe = stripped.endswith("|")
+        parts = stripped.strip("|").split("|")
+        is_separator = TABLE_SEPARATOR_RE.match(stripped) is not None
+
+        if is_separator:
+            normalized_parts = [normalize_table_separator(part) for part in parts]
+        else:
+            normalized_parts = [normalize_table_cell(part) for part in parts]
+
+        rebuilt = "|".join(normalized_parts)
+        if has_leading_pipe:
+            rebuilt = "|" + rebuilt
+        if has_trailing_pipe:
+            rebuilt = rebuilt + "|"
+        normalized_lines.append(rebuilt)
+    return "\n".join(normalized_lines)
 
 
 def parse_markdown_blocks(markdown_text: str) -> List[Dict[str, Any]]:
@@ -323,7 +368,7 @@ def chunk_markdown_document(
             flush_text_blocks()
             nodes.append(
                 TextNode(
-                    text=block_text,
+                    text=normalize_markdown_table(block_text),
                     metadata=build_chunk_metadata(
                         base_metadata,
                         "table",
@@ -380,8 +425,11 @@ def filter_nodes_by_chunk_type(nodes: List[TextNode], chunk_type: str) -> List[T
     return [node for node in nodes if node.metadata.get("chunk_type") == chunk_type]
 
 
-def build_storage_context() -> tuple[faiss.IndexFlatL2, StorageContext]:
-    faiss_index = faiss.IndexFlatL2(EMBED_DIM)
+def build_storage_context() -> tuple[faiss.Index, StorageContext]:
+    faiss_index = faiss.IndexPreTransform(
+        faiss.NormalizationTransform(EMBED_DIM),
+        faiss.IndexFlatIP(EMBED_DIM),
+    )
     vector_store = FaissVectorStore(faiss_index=faiss_index)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
     return faiss_index, storage_context
@@ -456,15 +504,17 @@ def test_similarity_from_disk(query: str, top_k: int = 3, chunk_type: str = "tex
         print(f"\n{'-' * 50} Result {i} {'-' * 50}")
         print(node.text)
         pprint(node.metadata)
+        print(node.score)
 
 
 def main() -> None:
-    force_rebuild_markdown = True
+    force_rebuild_markdown = False
+    force_rebuild_index = True
 
     text_index_path = INDEX_CONFIG["text"]["index_path"]
     table_index_path = INDEX_CONFIG["table"]["index_path"]
 
-    if text_index_path.exists() and table_index_path.exists() and not force_rebuild_markdown:
+    if text_index_path.exists() and table_index_path.exists() and not force_rebuild_index:
         print(f"[INFO] Reusing existing indexes: {FAISS_DIR}")
     else:
         print("[INFO] Building / rebuilding split indexes from markdown/PDF sources.")

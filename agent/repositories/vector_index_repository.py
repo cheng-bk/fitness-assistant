@@ -1,71 +1,141 @@
-import os
-import shutil
-from datetime import datetime
-from typing import Any, Dict, Optional
+import math
+import torch
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from ..infrastructure.database import (
-    get_embeddings_model,
-    get_index_path,
-    get_vector_store,
-    set_vector_store,
-)
+from ..infrastructure.faiss_llama_index import load_llama_index, get_reranker_components
 
 
-def get_index_directory(food_types: Optional[list[str]] = None) -> str:
-    return get_index_path(food_types=food_types)
+NAME_INDEX_DIR = Path("data/processed/faiss_store/names")
+KNOWLEDGE_INDEX_DIR = Path("data/processed/faiss_store/knowledge")
 
 
-def index_exists(path: str) -> bool:
-    return os.path.exists(path)
+def _retrieve_index_nodes(
+    persist_dir: Path,
+    cache_key: str,
+    query: str,
+    top_k: int,
+) -> List[Any]:
+    if not query.strip():
+        return []
+
+    index = load_llama_index(persist_dir=persist_dir, cache_key=cache_key)
+    if index is None:
+        return []
+
+    retriever = index.as_retriever(similarity_top_k=top_k)
+    return list(retriever.retrieve(query))
 
 
-def load_vector_store(food_types: Optional[list[str]] = None):
-    return get_vector_store(food_types=food_types)
+def _score_from_node(node: Any) -> float:
+    score = getattr(node, "score", None)
+    if score is None:
+        return 0.0
+    return round(float(score), 4)
 
 
-def get_embeddings():
-    return get_embeddings_model()
+def retrieve_name_matches(entity_type: str, query: str, top_k: int) -> List[Dict[str, Any]]:
+    raw_nodes = _retrieve_index_nodes(
+        persist_dir=NAME_INDEX_DIR / entity_type,
+        cache_key=f"name:{entity_type}",
+        query=query,
+        top_k=top_k,
+    )
+    matches: List[Dict[str, Any]] = []
+    for node in raw_nodes:
+        metadata = dict(getattr(node, "metadata", {}) or {})
+        matches.append(
+            {
+                "score": _score_from_node(node),
+                "entity_type": metadata.get("entity_type", entity_type),
+                "document_id": metadata.get("document_id"),
+                "name": metadata.get("name") or getattr(node, "text", ""),
+            }
+        )
+    return matches
 
 
-def cache_vector_store(food_types: Optional[list[str]], vector_store: Any) -> None:
-    set_vector_store(food_types=food_types, vector_store=vector_store)
+def _serialize_knowledge_node(node: Any) -> Dict[str, Any]:
+    metadata = dict(getattr(node, "metadata", {}) or {})
+    text = getattr(node, "text", "") or ""
+    return {
+        "score": _score_from_node(node),
+        "vector_score": _score_from_node(node),
+        "text": text,
+        "chunk_type": metadata.get("chunk_type"),
+        "header_path": metadata.get("header_path"),
+        "file_name": metadata.get("file_name"),
+        "domain": metadata.get("domain"),
+        "year": metadata.get("year"),
+    }
 
 
-def save_vector_store(vector_store: Any, path: str) -> None:
-    os.makedirs(path, exist_ok=True)
-    vector_store.save_local(path)
+def _rerank_query_documents(query: str, documents: List[str], batch_size: int = 16) -> Optional[List[float]]:
+
+    tokenizer, model = get_reranker_components()
+    device = model.device
+
+    scores: List[float] = []
+    with torch.inference_mode():
+        for start in range(0, len(documents), batch_size):
+            batch_docs = documents[start:start + batch_size]
+            pairs = [[query, document] for document in batch_docs]
+            inputs = tokenizer(
+                pairs,
+                padding=True,
+                truncation=True,
+                max_length=1024,
+                return_tensors="pt",
+            )
+            inputs = {key: value.to(device) for key, value in inputs.items()}
+            batch_scores = model(**inputs, return_dict=True).logits.view(-1, ).float().cpu().tolist()
+            scores.extend(float(score) for score in batch_scores)
+    return scores
 
 
-def drop_vector_store(food_types: Optional[list[str]] = None) -> None:
-    path = get_index_directory(food_types)
-    if os.path.isdir(path):
-        shutil.rmtree(path)
-    elif os.path.exists(path):
-        os.remove(path)
-    set_vector_store(food_types, None)
+def retrieve_knowledge_hits(
+    query: str,
+    top_k: int = 3,
+    candidate_multiplier: float = 2.0,
+) -> List[Dict[str, Any]]:
+    candidate_total = math.ceil(top_k * max(candidate_multiplier, 1.0))
+    text_k = max(1, candidate_total // 2)
+    table_k = max(1, candidate_total - text_k)
+    raw_nodes = [
+        *_retrieve_index_nodes(
+            persist_dir=KNOWLEDGE_INDEX_DIR / "text",
+            cache_key="knowledge:text",
+            query=query,
+            top_k=text_k,
+        ),
+        *_retrieve_index_nodes(
+            persist_dir=KNOWLEDGE_INDEX_DIR / "table",
+            cache_key="knowledge:table",
+            query=query,
+            top_k=table_k,
+        ),
+    ]
+    hits = [_serialize_knowledge_node(node) for node in raw_nodes]
+    rerank_scores = _rerank_query_documents(
+        query=query,
+        documents=[str(item.get("text") or "") for item in hits],
+    )
+    if rerank_scores is not None and len(rerank_scores) == len(hits):
+        for hit, rerank_score in zip(hits, rerank_scores):
+            hit["rerank_score"] = round(float(rerank_score), 4)
+        hits.sort(
+            key=lambda item: (
+                float(item.get("rerank_score", 0.0)),
+                float(item.get("vector_score", 0.0)),
+            ),
+            reverse=True,
+        )
+    else:
+        hits.sort(key=lambda item: float(item.get("vector_score", 0.0)), reverse=True)
 
-
-def check_file_info(path: str) -> Dict[str, Any]:
-    if not os.path.exists(path):
-        return {"exists": False}
-    try:
-        total_size = 0
-        latest_modified = 0.0
-        if os.path.isdir(path):
-            for file_name in os.listdir(path):
-                file_path = os.path.join(path, file_name)
-                if os.path.isfile(file_path):
-                    stat = os.stat(file_path)
-                    total_size += stat.st_size
-                    latest_modified = max(latest_modified, stat.st_mtime)
-        else:
-            stat = os.stat(path)
-            total_size = stat.st_size
-            latest_modified = stat.st_mtime
-        return {
-            "exists": True,
-            "file_size_mb": total_size / (1024 * 1024),
-            "last_modified": datetime.fromtimestamp(latest_modified).isoformat() if latest_modified else None,
-        }
-    except Exception as exc:
-        return {"exists": True, "error": f"Failed to get file info: {exc}"}
+    final_hits: List[Dict[str, Any]] = []
+    for hit in hits[:top_k]:
+        cleaned = dict(hit)
+        cleaned["score"] = cleaned.get("rerank_score", cleaned.get("vector_score", 0.0))
+        final_hits.append(cleaned)
+    return final_hits
