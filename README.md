@@ -54,7 +54,7 @@ flowchart TD
     TOOLS --> VR
 
     VR --> INFRA[agent/infrastructure/*]
-    FR --> DB[(MongoDB)]
+    FR --> DB[(MongoDB\nFaiss\nLlama Index)]
     ER --> DB
     PR --> DB
     INFRA --> DB
