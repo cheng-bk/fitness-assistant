@@ -22,8 +22,16 @@ VEGETABLE_CATEGORIES = [
     "Vegetables and Vegetable Products",
 ]
 FAT_CATEGORIES = [
-    "Fats and Oils",
     "Nut and Seed Products",
+]
+OIL_CATEGORIES = [
+    "Fats and Oils",
+]
+OIL_NAME_WHITELIST = [
+    "Oil, peanut",
+    "Oil, soybean",
+    "Oil, olive, extra virgin",
+    "Oil, olive, extra light",
 ]
 FLEXIBLE_CATEGORIES = [
     "Fruits and Fruit Juices",
@@ -47,6 +55,10 @@ MEAL_SLOT_QUERIES: Dict[str, Dict[str, Any]] = {
     "fats": {
         "category": {"$in": FAT_CATEGORIES},
     },
+    "oil": {
+        "category": {"$in": OIL_CATEGORIES},
+        "name": {"$in": OIL_NAME_WHITELIST},
+    },
     "flexible": {
         "category": {"$in": FLEXIBLE_CATEGORIES},
     },
@@ -57,6 +69,7 @@ MEAL_SLOT_SORTS: Dict[str, List[tuple[str, int]]] = {
     "carbs": [("per_100g.carbs_g", pymongo.DESCENDING), ("per_100g.fat_g", pymongo.ASCENDING)],
     "vegetables": [("per_100g.calories_kcal", pymongo.ASCENDING), ("per_100g.carbs_g", pymongo.ASCENDING)],
     "fats": [("per_100g.fat_g", pymongo.DESCENDING), ("per_100g.calories_kcal", pymongo.ASCENDING)],
+    "oil": [("name", pymongo.ASCENDING)],
     "flexible": [("per_100g.carbs_g", pymongo.DESCENDING), ("name", pymongo.ASCENDING)],
 }
 
@@ -86,7 +99,7 @@ def find_foods_for_meal_slot(
 ) -> List[Dict[str, Any]]:
     slot_query = MEAL_SLOT_QUERIES.get(slot_name, {})
     base_filter = _base_collection_filter(food_types)
-    if meal_candidates_only:
+    if meal_candidates_only and slot_name != "oil":
         base_filter = _merge_filters(base_filter, {"candidate_flags.is_meal_candidate": True})
     mongo_query = _merge_filters(base_filter, slot_query)
     sort_spec = MEAL_SLOT_SORTS.get(slot_name, [("name", pymongo.ASCENDING)])

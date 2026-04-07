@@ -10,6 +10,7 @@ from ..repositories.food_repository import (
     CARB_CATEGORIES,
     FAT_CATEGORIES,
     FLEXIBLE_CATEGORIES,
+    OIL_CATEGORIES,
     PROTEIN_CATEGORIES,
     VEGETABLE_CATEGORIES,
     find_foods_for_meal_slot,
@@ -22,6 +23,7 @@ MEAL_ROLE_CATEGORY_MAP = {
     "carbs": set(CARB_CATEGORIES),
     "vegetables": set(VEGETABLE_CATEGORIES),
     "fats": set(FAT_CATEGORIES),
+    "oil": set(OIL_CATEGORIES),
     "flexible": set(FLEXIBLE_CATEGORIES),
 }
 
@@ -69,7 +71,7 @@ def _build_food_candidate_bundle(
 ) -> Dict[str, Any]:
     normalized_food_types = food_types or ["foundation"]
     slot_candidates: Dict[str, List[Dict[str, Any]]] = {}
-    for slot_name in ["proteins", "carbs", "vegetables", "fats", "flexible"]:
+    for slot_name in ["proteins", "carbs", "vegetables", "fats", "oil", "flexible"]:
         slot_from_db = find_foods_for_meal_slot(
             slot_name=slot_name,
             limit=limit_per_slot,

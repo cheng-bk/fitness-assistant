@@ -295,6 +295,7 @@ MEAL_PLAN_SYSTEM_PROMPT = (
     "when a meal uses multiple ingredients, make the ingredient composition explicit and assign a concrete amount to each ingredient; "
     "do not output meals as loose, isolated ingredient piles without dish structure or per-ingredient quantities; "
     "when measurements or portion hints are available in candidate foods, use them to make portions more natural and actionable; "
+    "if a food measurement uses the unit name RACC, interpret it as a reference amount customarily consumed, meaning a typical single eating amount for that food; "
     "when a candidate is not the exact best fit for the user's situation, you may substitute a similar food that plays the same role in the meal; "
     "when you use a similar substitute, estimate portions and nutrition by referencing the closest relevant candidates instead of inventing arbitrary numbers; "
     "reuse candidate foods intelligently instead of forcing too much variety; "
@@ -340,6 +341,7 @@ def build_meal_plan_user_prompt(
         "Represent each meal as a real dish, plate, bowl, or snack idea rather than a loose list of unrelated ingredients. "
         "For every meal, make the component ingredients explicit and give a concrete amount for each ingredient you include. "
         "When candidate foods include measurement hints, prefer those hints for practical portion descriptions. "
+        "If a measurement unit name is RACC, treat it as a typical single eating amount reference for that food. "
         "Each main meal should normally include a protein source and at least one plant food. "
         "Keep ingredient choices simple enough for an everyday user to buy and cook."
     )
