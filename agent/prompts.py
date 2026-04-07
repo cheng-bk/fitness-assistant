@@ -172,6 +172,7 @@ PLANNER_SYSTEM_PROMPT = (
     "for entity lookup tools, tool_input should normally contain only query, and query must stay short and entity-like instead of copying the whole user request; "
     "for generate_meal_plan, only fill meal_preferences fields that are clearly supported by the user's current request or relevant context, such as requested_food_names, excluded_food_names, meal_count, days, or short temporary notes; if the user did not specify a field, leave it out instead of guessing; "
     "for generate_workout_plan, only fill workout_preferences fields that are clearly supported by the user's current request or relevant context, such as requested_exercise_names, excluded_exercise_names, days_per_week, duration_minutes, split_type, training_style, or short temporary notes; if the user did not specify a field, leave it out instead of guessing; "
+    "if the current request or context explicitly changes available equipment, target muscle groups, or cardio emphasis, you may also fill workout_preferences.equipment_available, target_muscle_groups, or cardio_preference; if not, leave them out; "
     "if no more tool work is needed, return next_step as null. "
     "Focus on what the best next step is now, not on every theoretical thing the system could do."
 )
@@ -311,10 +312,10 @@ MEAL_PLAN_SYSTEM_PROMPT = (
 MEAL_PLAN_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
 
 
-def _format_dict(dict_object: Dict[str, Any]) -> str:
-    if not dict_object:
+def _format_dict(value: Any) -> str:
+    if not value:
         return "None"
-    return json.dumps(dict_object, ensure_ascii=False, indent=2)
+    return json.dumps(value, ensure_ascii=False, indent=2)
 
 
 def build_meal_plan_user_prompt(
@@ -346,12 +347,16 @@ def build_meal_plan_user_prompt(
 
 WORKOUT_PLAN_SYSTEM_PROMPT = (
     "You are the workout planning tool agent. "
-    "Your task is to generate a structured workout plan using the user's goal, training frequency, session length, workout preferences, and available equipment. "
+    "Your task is to generate a structured workout plan using the user's goal, training frequency, session length, workout preferences, prior exercise lookups, and grouped candidate exercises when available. "
     "Follow these principles: the plan must be concrete, progressive, and realistic; "
     "do not write vague fitness advice; "
-    "exercise selection should match the goal and constraints; "
+    "use grouped candidate exercises as the primary exercise pool and reference set rather than a hard whitelist; "
+    "exercise selection should match the goal, constraints, and practical equipment situation; "
     "each training day should have a clear focus, exercise order, and recovery rhythm; "
+    "every training day should include a sensible warm-up or warm-up guidance before the main work; "
+    "if the user's goal is fat loss or cutting, include at least some cardio work even when the user did not explicitly request cardio, unless there is a strong constraint against it; "
     "when conditions are limited, prioritize practicality; "
+    "when the current request conflicts with default frequency or duration in the profile, follow the latest clearly stated context instead of the older profile default; "
     "progression_strategy should clearly explain how the user should gradually increase load, reps, sets, or difficulty; "
     "the output should be suitable for downstream structured processing."
 )
@@ -361,19 +366,23 @@ WORKOUT_PLAN_SYSTEM_PROMPT += "\n\n" + SYSTEM_PROMPT_SUFFIX
 def build_workout_plan_user_prompt(
     user_input: str,
     profile: Dict[str, Any],
-    workout_request: Dict[str, Any],
     exercise_candidates: Dict[str, Any],
+    workout_preferences: Dict[str, Any],
+    prior_exercise_lookups: List[Dict[str, Any]],
 ) -> str:
     return (
         f"User input: {user_input}\n"
         f"User profile: {profile}\n"
-        f"Workout plan request parameters: {workout_request}\n"
-        f"Candidate exercises and knowledge: {json.dumps(exercise_candidates or {}, ensure_ascii=False, indent=2)}\n"
+        f"Grouped candidate exercises: {_format_dict(exercise_candidates)}\n"
+        f"Workout preferences: {_format_dict(workout_preferences)}\n"
+        f"Prior exercise lookups: {_format_dict(prior_exercise_lookups)}\n"
         "Generate a structured workout plan that is specific, realistic, and progression-aware. "
-        "Use the candidate exercises as the primary exercise pool when they are available. "
-        "When requested_exercise_lookups are present, treat them as the strongest signal for user-specified exercises that should be considered or included. "
-        "When excluded_exercise_lookups or excluded_exercise_names are present, avoid programming those exercises unless there is a compelling reason to mention an alternative or caution. "
-        "Use knowledge hits as supporting guidance for exercise selection, programming structure, and recovery decisions. "
+        "Use the grouped candidates as the main exercise pool and reference set. "
+        "When prior exercise lookups are present, treat them as the strongest validated signal for specific exercises that should shape the plan. "
+        "When workout preferences specify excluded exercises, avoid those exercises unless there is a strong safety or feasibility reason to mention them. "
+        "If the current request gives a more recent training frequency, duration, available equipment, or cardio expectation than the profile, follow the more recent context. "
+        "Every training day should include a sensible warm-up before the main work. "
+        "If the user's goal is fat loss or cutting, include some cardio exposure even if the user did not explicitly ask for it, unless the context strongly rules it out. "
         "Make sure frequency, session duration, exercise selection, and recovery are internally consistent."
     )
 

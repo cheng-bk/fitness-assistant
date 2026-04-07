@@ -72,6 +72,7 @@ async def generate_workout_plan_tool(
     user_input: str,
     user_profile: Dict[str, Any],
     workout_preferences: Optional[Dict[str, Any]] = None,
+    prior_exercise_lookups: Optional[List[Dict[str, Any]]] = None,
     base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model_name: str = "qwen3.5-plus",
 ) -> Dict[str, Any]:
@@ -79,6 +80,7 @@ async def generate_workout_plan_tool(
         user_input=user_input,
         user_profile=user_profile,
         workout_preferences=workout_preferences,
+        prior_exercise_lookups=prior_exercise_lookups,
         base_url=base_url,
         model_name=model_name,
     )
@@ -145,12 +147,16 @@ def build_tool_registry(
                 "Generate a structured workout plan. "
                 "Use this tool when the user wants a training schedule, weekly routine, equipment-constrained plan, muscle gain program, or fat loss training plan. "
                 "This tool behaves like a sub-agent: it internally retrieves representative candidate exercises before generating the final plan. "
+                "If the plan depends on specific named exercises, the planner should usually call search_exercise_entity first. "
                 "LLM-owned input: workout_preferences.requested_exercise_names = exercise names that should be included or prioritized; "
                 "workout_preferences.excluded_exercise_names = exercise names that should be avoided; "
                 "workout_preferences.days_per_week = target training frequency; "
                 "workout_preferences.duration_minutes = preferred session duration; "
                 "workout_preferences.split_type = preferred split style; "
                 "workout_preferences.training_style = preferred training style; "
+                "workout_preferences.equipment_available = equipment explicitly available in the current context when it differs from the long-term profile; "
+                "workout_preferences.target_muscle_groups = muscle groups the user especially wants to prioritize; "
+                "workout_preferences.cardio_preference = preferred cardio emphasis such as none, light, moderate, or high; "
                 "workout_preferences.notes = short temporary planning constraints for this plan only."
             ),
             args_schema=WorkoutPlanInput,

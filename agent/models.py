@@ -182,6 +182,9 @@ class WorkoutPreferencesInput(BaseModel):
     duration_minutes: Optional[int] = Field(default=None, description="Preferred session length in minutes.")
     split_type: Optional[str] = Field(default=None, description="Preferred training split, such as full_body or upper_lower.")
     training_style: Optional[str] = Field(default=None, description="Preferred training style, such as hypertrophy or strength.")
+    equipment_available: List[str] = Field(default_factory=list, description="Equipment available for this plan, when the current context overrides the default profile.")
+    target_muscle_groups: List[str] = Field(default_factory=list, description="Muscle groups the user especially wants to prioritize.")
+    cardio_preference: Optional[str] = Field(default=None, description="Preferred cardio emphasis, such as none, light, moderate, or high.")
     notes: List[str] = Field(default_factory=list, description="Short temporary constraints for this plan only.")
 
 

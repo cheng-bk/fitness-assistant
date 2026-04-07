@@ -293,12 +293,11 @@ class FitnessGraph:
         if tool_name == "generate_workout_plan":
             workout_preferences = dict(step_input.pop("workout_preferences", {}) or {})
             prior_exercise_lookups = self._artifact_list(artifacts, "exercise_lookup")
-            if prior_exercise_lookups:
-                workout_preferences.setdefault("exercise_lookups", prior_exercise_lookups)
             payload = {
                 "user_input": request.user_input,
                 "user_profile": profile,
                 "workout_preferences": workout_preferences,
+                "prior_exercise_lookups": prior_exercise_lookups,
                 "base_url": self.base_url,
                 "model_name": self.model_name,
             }
